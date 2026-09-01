@@ -1,4 +1,3 @@
-use crate::protocol::message;
 
 pub struct Message {
     message_type: u8,
@@ -110,6 +109,12 @@ impl Message {
             b'K' => ServerMessage::BackendKeyData(self.payload),
             b'Z' => ServerMessage::ReadyForQuery(self.payload),
             b'E' => ServerMessage::ErrorResponse(self.payload),
+
+            // Query result
+            b'T' => ServerMessage::RowDescription(self.payload),
+            b'D' => ServerMessage::DataRow(self.payload),
+            b'C' => ServerMessage::CommandComplete(self.payload),
+
             other => ServerMessage::Unknown(other, self.payload),
         }
     }
@@ -121,5 +126,13 @@ pub enum ServerMessage {
     BackendKeyData(Vec<u8>),
     ReadyForQuery(Vec<u8>),
     ErrorResponse(Vec<u8>),
+
+    RowDescription(Vec<u8>),
+    DataRow(Vec<u8>),
+    CommandComplete(Vec<u8>),
+
     Unknown(u8, Vec<u8>),
+}
+
+impl ServerMessage {
 }

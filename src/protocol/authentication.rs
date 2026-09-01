@@ -1,4 +1,4 @@
-use crate::{DbError, protocol::message};
+use crate::DbError;
 
 pub enum AuthKind {
     AuthenticationOk,
@@ -109,12 +109,6 @@ impl AuthKind {
 
 
     fn parse_sasl_continue(payload: &[u8]) -> Result<String, DbError> {
-        if payload.len() < 5 {
-            return Err(DbError::new(
-                String::from("Invalid SASL continue payload")
-            ));
-        }
-
         let message = std::str::from_utf8(&payload)
             .map_err(|_| DbError::new(
                 String::from("Invalid UTF-8 in SASL continue message")
@@ -125,12 +119,6 @@ impl AuthKind {
 
 
     fn parse_sasl_final(payload: &[u8]) -> Result<String, DbError> {
-        if payload.len() < 5 {
-            return Err(DbError::new(
-                String::from("Invalid SASL final payload")
-            ));
-        }
-
         let message = std::str::from_utf8(&payload)
             .map_err(|_| DbError::new(
                 String::from("Invalid UTF-8 in SASL final message")

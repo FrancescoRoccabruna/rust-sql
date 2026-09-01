@@ -74,16 +74,6 @@ impl ScramClient {
                 String::from("Missing SCRAM iterations")
             ))?;
 
-        let server_nonce = self.server_nonce.as_ref()
-            .ok_or_else(|| DbError::new(
-                String::from("Missing server nonce")
-            ))?;
-
-        let server_first_message = self.server_first_message.as_ref()
-            .ok_or_else(|| DbError::new(
-                String::from("Missing server first message")
-            ))?;
-
         let salt = general_purpose::STANDARD
             .decode(salt)
             .map_err(|_| DbError::new(
@@ -117,26 +107,9 @@ impl ScramClient {
 
         let stored_key = hasher.finalize();
 
-        // client-first-message-bare
-        let client_first_bare = format!(
-            "n={},r={}",
-            self.username,
-            self.client_nonce
-        );
-
-        // client-final-message-without-proof
-        let client_final_without_proof = format!(
-            "c=biws,r={}",
-            server_nonce
-        );
 
         // AuthMessage
-        let auth_message = format!(
-            "{},{},{}",
-            client_first_bare,
-            server_first_message,
-            client_final_without_proof
-        );
+        let auth_message = self.auth_message()?;
 
         // ClientSignature
         let mut mac = HmacSha256::new_from_slice(&stored_key)
@@ -222,5 +195,135 @@ impl ScramClient {
         self.server_first_message = Some(message.to_string());
 
         Ok(())
+    }
+
+    fn auth_message(&self) -> Result<String, DbError> {
+
+        let client_first_bare = format!(
+            "n={},r={}",
+            self.username,
+            self.client_nonce
+        );
+
+        let server_first_message = self.server_first_message.as_ref()
+            .ok_or_else(|| DbError::new(
+                String::from("Missing server first message")
+            ))?;
+
+        let server_nonce = self.server_nonce.as_ref()
+            .ok_or_else(|| DbError::new(
+                String::from("Missing server nonce")
+            ))?;
+
+        let client_final_without_proof = format!(
+            "c=biws,r={}",
+            server_nonce
+        );
+
+
+        let auth_message = format!(
+            "{},{},{}",
+            client_first_bare,
+            server_first_message,
+            client_final_without_proof
+        );
+
+        Ok(auth_message)
+    }
+
+    pub fn handle_server_final(
+    &mut self,
+    message: &str,
+    ) -> Result<(), DbError> {
+
+
+        let (key, value) = message.split_once('=')
+            .ok_or_else(|| DbError::new(
+                String::from("Invalid SCRAM server-final-message")
+            ))?;
+
+        match key {
+            "v" => {
+                let received_signature = general_purpose::STANDARD
+                    .decode(value)
+                    .map_err(|_| DbError::new(
+                        String::from("Invalid SCRAM server signature")
+                    ))?;
+                let expected_signature = self.server_signature()?;
+
+                if received_signature != expected_signature {
+                    return Err(DbError::new(
+                        String::from("SCRAM server signature mismatch")
+                    ));
+                }
+            }
+
+            "e" => {
+                // Il server sta comunicando un errore SCRAM
+                return Err(DbError::new(
+                    format!("SCRAM authentication failed: {}", value)
+                ));
+            }
+
+            _ => {
+                return Err(DbError::new(
+                    String::from("Invalid SCRAM server-final-message")
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+
+    fn server_signature(&self) -> Result<Vec<u8>, DbError> {
+        let salt = self.salt.as_ref()
+            .ok_or_else(|| DbError::new(
+                String::from("Missing SCRAM salt")
+            ))?;
+
+        let iterations = self.iterations
+            .ok_or_else(|| DbError::new(
+                String::from("Missing SCRAM iterations")
+            ))?;
+
+        let salt = general_purpose::STANDARD
+            .decode(salt)
+            .map_err(|_| DbError::new(
+                String::from("Invalid SCRAM salt")
+            ))?;
+
+        // SaltedPassword
+        let mut salted_password = [0u8; 32];
+
+        pbkdf2_hmac::<Sha256>(
+            self.password.as_bytes(),
+            &salt,
+            iterations,
+            &mut salted_password,
+        );
+
+        // ServerKey
+        let mut mac = HmacSha256::new_from_slice(&salted_password)
+            .map_err(|_| DbError::new(
+                String::from("Failed to create HMAC")
+            ))?;
+
+        mac.update(b"Server Key");
+
+        let server_key = mac.finalize().into_bytes();
+
+        // AuthMessage
+        let auth_message = self.auth_message()?;
+
+        // ServerSignature
+        let mut mac = HmacSha256::new_from_slice(&server_key)
+            .map_err(|_| DbError::new(
+                String::from("Failed to create HMAC")
+            ))?;
+
+        mac.update(auth_message.as_bytes());
+
+        Ok(mac.finalize().into_bytes().to_vec())
     }
 }

@@ -3,9 +3,9 @@ use std::{
     net::TcpStream,
 };
 
-use crate::protocol::{
+use crate::{protocol::{
     authentication::AuthKind, message::{self, Message, ServerMessage}, scram::ScramClient
-};
+}, query::{Query, QueryResult}};
 
 
 pub struct Connection {
@@ -68,6 +68,24 @@ impl Connection {
                 match auth {
                     AuthKind::SASL(mechanisms) => {
                         self.authenticate_scram(mechanisms, username, password)?;
+
+
+                        loop {
+                            let message = self.read_message()?;
+                            let message = message.parse();
+
+                            match message {
+                                ServerMessage::ReadyForQuery(_) => {
+                                    return Ok(());
+                                }
+
+                                ServerMessage::Unknown(message_type, payload ) => {
+                                    return Err(DbError::new(format!("Unknown message type: {}", message_type)));
+                                }
+
+                                _ => {}
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -123,6 +141,12 @@ impl Connection {
             .map_err(|e| DbError::new(e.to_string()))?;
 
         let length = u32::from_be_bytes(length_buffer);
+
+        if length < 4 {
+            return Err(DbError::new(
+                String::from("Invalid PostgreSQL message length")
+            ));
+        }
 
         let payload_length = length - 4; //la lunghezza del length stesso
 
@@ -188,8 +212,7 @@ impl Connection {
 
                                 match auth {
                                     AuthKind::SASLFinal(message) => {
-                                        // estrai v=...
-                                        // verifica ServerSignature
+                                        scram.handle_server_final(&message)?;
                                     }
                                     _ => {
                                         return Err(DbError::new(
@@ -215,10 +238,38 @@ impl Connection {
 
         Ok(())
     }
+
+    pub fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError>{
+        self.send(&query.encode())?;
+
+        let mut result = QueryResult::new();
+
+        loop {
+            let message = self.read_message()?;
+
+            match message.parse() {
+                ServerMessage::ErrorResponse(payload) => {
+                    return Err(DbError::new(format!("error: {:?}", payload)));
+                }
+
+                ServerMessage::ReadyForQuery(_) => {
+                    break;
+                }
+
+                other => {
+                    result.add(other);
+                }
+            }
+        }
+
+
+        Ok(result)
+
+    }
 }
 
 
-
+#[derive(Debug)]
 pub struct DbError {
     pub message: String
 }

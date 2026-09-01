@@ -1,6 +1,7 @@
 mod config;
 mod connection;
 mod protocol;
+mod query;
 
 pub use config::DatabaseConfig;
 pub use connection::{Connection, DbError};
@@ -9,7 +10,7 @@ pub use connection::{Connection, DbError};
 
 #[cfg(test)]
 mod tests {
-    use crate::DatabaseConfig;
+    use crate::{DatabaseConfig, query::Query};
 
 
     #[test]
@@ -22,9 +23,23 @@ mod tests {
             String::from("testdb"),
         );
 
-        let result = config.connect();
+        let connection = config.connect();
 
-        assert!(result.is_ok());
+        assert!(connection.is_ok());
+
+        let mut connection = connection.unwrap();
+
+        let mut query = Query::new("SELECT 1;");
+
+
+        connection.exec(&query);
+
+        query = Query::new("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT);");
+
+        connection.exec(&query);
+
+
+        
     }
 }
 
