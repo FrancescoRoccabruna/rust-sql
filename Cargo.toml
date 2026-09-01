@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 rand = "0.9"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+base64 = "0.22"
