@@ -1,6 +1,6 @@
 mod config;
 mod connection;
-mod protocol;
+mod postgres_protocol;
 mod query;
 
 pub use config::DatabaseConfig;
@@ -10,12 +10,13 @@ pub use connection::{Connection, DbError};
 
 #[cfg(test)]
 mod tests {
-    use crate::{DatabaseConfig, query::Query};
+    use crate::{DatabaseConfig, config::DatabaseKind, query::Query};
 
 
     #[test]
     fn connection_test() {
         let config = DatabaseConfig::new(
+            DatabaseKind::Postgres,
             String::from("localhost"),
             5432,
             String::from("postgres"),

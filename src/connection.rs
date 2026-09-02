@@ -3,8 +3,8 @@ use std::{
     net::TcpStream,
 };
 
-use crate::{protocol::{
-    authentication::AuthKind, message::{self, Message, ServerMessage}, scram::ScramClient
+use crate::{postgres_protocol::{
+    authentication::AuthKind, message::{Message, ServerMessage}, scram::ScramClient
 }, query::{Query, QueryResult}};
 
 
@@ -79,7 +79,7 @@ impl Connection {
                                     return Ok(());
                                 }
 
-                                ServerMessage::Unknown(message_type, payload ) => {
+                                ServerMessage::Unknown(message_type, _ ) => {
                                     return Err(DbError::new(format!("Unknown message type: {}", message_type)));
                                 }
 

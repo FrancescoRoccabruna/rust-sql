@@ -1,4 +1,4 @@
-use crate::protocol::message::ServerMessage;
+use crate::postgres_protocol::message::ServerMessage;
 
 
 pub struct Query {

@@ -5,6 +5,7 @@ use crate::{
 
 
 pub struct DatabaseConfig {
+    kind: DatabaseKind,
     host: String,
     port: u16,
     username: String,
@@ -15,12 +16,14 @@ pub struct DatabaseConfig {
 
 impl DatabaseConfig {
     pub fn new(
+        kind: DatabaseKind,
         host: String,
         port: u16, username: String,
         password: String,
         db_name: String
     ) -> Self {
         Self {
+            kind,
             host,
             port,
             username,
@@ -44,4 +47,10 @@ impl DatabaseConfig {
         Ok(connection)
     }
 
+}
+
+
+pub enum DatabaseKind {
+    Postgres,
+    MySql,
 }

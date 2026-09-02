@@ -36,10 +36,6 @@ impl ScramClient {
         }
     }
 
-    pub fn client_nonce(&self) -> &str {
-        &self.client_nonce
-    }
-
     pub fn first_message(&self) -> String {
         format!(
             "n,,n={},r={}",
