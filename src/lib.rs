@@ -1,7 +1,9 @@
 mod config;
 mod connection;
 mod postgres_protocol;
+mod mysql_protocol;
 mod query;
+mod backend;
 
 pub use config::DatabaseConfig;
 pub use connection::{Connection, DbError};

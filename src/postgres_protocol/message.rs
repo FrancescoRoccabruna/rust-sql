@@ -4,6 +4,7 @@ pub struct Message {
     payload: Vec<u8>,
 }
 
+
 impl Message {
 
     pub fn new(message_type: u8, payload: Vec<u8>) -> Self {

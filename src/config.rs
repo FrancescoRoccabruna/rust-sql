@@ -32,11 +32,11 @@ impl DatabaseConfig {
         }
     }
 
-    pub fn connect(&self) -> Result<Connection, DbError> {
+    pub fn connect(self) -> Result<Connection, DbError> {
         if self.host.is_empty(){
             return Err(DbError::new(String::from("Host is empty")));
         }
-        let mut connection = Connection::new(self.host.clone(), self.port);
+        let mut connection = Connection::new(self.host, self.port, self.kind);
 
         connection.open(
             &self.username,
