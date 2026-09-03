@@ -103,7 +103,7 @@ impl<'a> PostgresBackend<'a> {
                                     }
                                     _ => {
                                         return Err(DbError::new(
-                                            String::from("Expected SASL final")
+                                            String::from("Expected SASL final message")
                                         ));
                                     }
                                 }
@@ -114,7 +114,7 @@ impl<'a> PostgresBackend<'a> {
                         }
                     }
                     _ => {
-                        return Err(DbError::new(String::from("Expected Authentication message")));
+                        return Err(DbError::new(String::from("Expected SASL Continue message")));
                     }
                 }
             }
@@ -183,7 +183,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-    
+
 
 
     fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {

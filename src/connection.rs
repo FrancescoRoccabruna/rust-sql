@@ -4,9 +4,7 @@ use std::{
 };
 
 use crate::{
-    backend::{postgres::PostgresBackend, Backend},
-    config::DatabaseKind,
-    query::{Query, QueryResult},
+    backend::{Backend, postgres::PostgresBackend}, config::DatabaseKind, query::{Query, QueryResult},
 };
 
 
@@ -51,8 +49,16 @@ impl Connection {
 
         self.connect_tcp()?;
 
-        let mut backend = PostgresBackend::new(self);
-        backend.open(username, password, db_name)
+        match &self.kind {
+            DatabaseKind::Postgres => {
+                let mut backend = PostgresBackend::new(self);
+                return backend.open(username, password, db_name);
+            }
+
+            _ => {
+                todo!()
+            }
+        }
     }
 
     pub fn is_open(&self) -> bool {
@@ -89,10 +95,19 @@ impl Connection {
 
 
     pub fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError>{
-        let mut backend = PostgresBackend::new(self);
 
-        backend.exec(query)
+        match &self.kind {
+            DatabaseKind::Postgres => {
+                let mut backend = PostgresBackend::new(self);
 
+                return backend.exec(query);
+            }
+
+            _ => {
+                todo!()
+            }
+
+        }
     }
 }
 
