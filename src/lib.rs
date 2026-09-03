@@ -42,6 +42,21 @@ mod tests {
         connection.exec(&query);
 
 
+        let config = DatabaseConfig::new(
+            DatabaseKind::MySql,
+            String::from("localhost"),
+            3306,
+            String::from("mysql"),
+            String::from("password"),
+            String::from("testdb"),
+        );
+
+        let connection = config.connect()
+            .expect("MySQL connection failed");
+
+        //assert!(connection.is_ok());
+
+
         
     }
 }

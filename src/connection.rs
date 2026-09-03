@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    backend::{Backend, postgres::PostgresBackend}, config::DatabaseKind, query::{Query, QueryResult},
+    backend::{self, Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, query::{Query, QueryResult},
 };
 
 
@@ -52,6 +52,11 @@ impl Connection {
         match &self.kind {
             DatabaseKind::Postgres => {
                 let mut backend = PostgresBackend::new(self);
+                return backend.open(username, password, db_name);
+            }
+
+            DatabaseKind::MySql => {
+                let mut backend = MysqlBackend::new(self);
                 return backend.open(username, password, db_name);
             }
 

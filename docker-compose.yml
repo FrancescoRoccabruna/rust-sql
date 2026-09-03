@@ -1,4 +1,5 @@
 services:
+
   postgres:
     image: postgres:18
     container_name: rust-sql-postgres
@@ -8,3 +9,14 @@ services:
       POSTGRES_DB: testdb
     ports:
       - "5432:5432"
+
+  mysql:
+    image: mysql:8.4
+    container_name: rust-sql-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: mysql
+      MYSQL_PASSWORD: password
+    ports:
+      - "3306:3306"
