@@ -119,6 +119,21 @@ impl Message {
             other => ServerMessage::Unknown(other, self.payload),
         }
     }
+
+    pub fn query(sql: &str) -> Vec<u8> {
+        let mut query = Vec::new();
+
+        query.push(b'Q');
+
+        // Lunghezza: 4 byte length + query + terminatore NUL
+        let length = (4 + sql.len() + 1) as u32;
+        query.extend_from_slice(&length.to_be_bytes());
+
+        query.extend_from_slice(sql.as_bytes());
+        query.push(0);
+
+        query
+    }
 }
 
 pub enum ServerMessage {

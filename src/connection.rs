@@ -108,6 +108,12 @@ impl Connection {
                 return backend.exec(query);
             }
 
+            DatabaseKind::MySql => {
+                let mut backend = MysqlBackend::new(self);
+
+                return backend.exec(query);
+            }
+
             _ => {
                 todo!()
             }

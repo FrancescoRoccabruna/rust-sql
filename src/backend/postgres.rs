@@ -187,7 +187,9 @@ impl<'a> Backend for PostgresBackend<'a> {
 
 
     fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {
-        self.connection.write(&query.encode())?;
+
+        let message = Message::query(query.sql());
+        self.connection.write(&message)?;
 
         let mut result = QueryResult::new();
         let mut error = None;

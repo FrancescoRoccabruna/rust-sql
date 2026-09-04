@@ -12,7 +12,7 @@ pub use connection::{Connection, DbError};
 
 #[cfg(test)]
 mod tests {
-    use crate::{DatabaseConfig, config::DatabaseKind, query::Query};
+    use crate::{DatabaseConfig, config::DatabaseKind, connection, query::Query};
 
 
     #[test]
@@ -51,13 +51,18 @@ mod tests {
             String::from("testdb"),
         );
 
-        let connection = config.connect()
-            .expect("MySQL connection failed");
 
-        //assert!(connection.is_ok());
+        let connection = config.connect();
 
 
-        
+        assert!(connection.is_ok());
+
+        let mut connection = connection.unwrap();
+
+        query = Query::new("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name VARCHAR(32));");
+
+        connection.exec(&query);
+
     }
 }
 
