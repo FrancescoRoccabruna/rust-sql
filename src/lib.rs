@@ -12,7 +12,7 @@ pub use connection::{Connection, DbError};
 
 #[cfg(test)]
 mod tests {
-    use crate::{DatabaseConfig, config::DatabaseKind, connection, query::Query};
+    use crate::{DatabaseConfig, config::DatabaseKind, query::Query};
 
 
     #[test]
@@ -45,7 +45,7 @@ mod tests {
         let config = DatabaseConfig::new(
             DatabaseKind::MySql,
             String::from("localhost"),
-            3306,
+            3307,
             String::from("mysql"),
             String::from("password"),
             String::from("testdb"),
