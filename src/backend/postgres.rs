@@ -1,4 +1,4 @@
-use crate::{Connection, DbError, backend::Backend, postgres_protocol::{authentication::AuthKind, message::{Message, ServerMessage}, scram::ScramClient}, query::{Query, QueryResult}};
+use crate::{Connection, DbError, backend::Backend, postgres_protocol::{authentication::AuthKind, message::{Message, ServerMessage}, result::ResultParser, scram::ScramClient}, query::{Query, QueryResult}};
 
 pub struct PostgresBackend<'a> {
     connection: &'a mut Connection,
@@ -174,7 +174,9 @@ impl<'a> Backend for PostgresBackend<'a> {
             }
 
             ServerMessage::ErrorResponse(payload) => {
-                println!("Error: {:?}", payload);
+                return Err(DbError::new(
+                    format!("PostgreSQL error: {:?}", payload)
+                ));
             }
 
             _ => {}
@@ -194,6 +196,11 @@ impl<'a> Backend for PostgresBackend<'a> {
         let mut result = QueryResult::new();
         let mut error = None;
 
+        let mut columns = Vec::new();
+
+        let mut type_oids = Vec::new();
+        let mut format_codes = Vec::new();
+
         loop {
             let message = self.read_message()?;
 
@@ -206,8 +213,23 @@ impl<'a> Backend for PostgresBackend<'a> {
                     break;
                 }
 
+                ServerMessage::RowDescription(payload) => {
+                    let (parsed_columns, parsed_type_oids, parsed_format_codes) =
+                        ResultParser::parse_row_description(&payload)?;
+
+                    columns = parsed_columns;
+                    type_oids = parsed_type_oids;
+                    format_codes = parsed_format_codes;
+                }
+
+                ServerMessage::DataRow(payload) => {
+                    let row = ResultParser::parse_data_row(&payload, &columns, &type_oids, &format_codes)?;
+
+                    result.add_row(row);
+                }
+
                 other => {
-                    result.add(other);
+                    //result.add(other);
                 }
             }
         }
@@ -215,6 +237,8 @@ impl<'a> Backend for PostgresBackend<'a> {
         if let Some(error) = error {
             return Err(error);
         }
+
+        result.set_columns(columns);
 
         Ok(result)
     }
