@@ -35,10 +35,13 @@ mod tests {
 
         let mut query = Query::new("SELECT 1;");
 
+        connection.exec(&query).unwrap();
+
+        query = Query::new("DROP TABLE IF EXISTS users");
 
         connection.exec(&query).unwrap();
 
-        query = Query::new("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT);");
+        query = Query::new("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, surname TEXT);");
 
         connection.exec(&query).unwrap();
 
@@ -106,7 +109,7 @@ mod tests {
         connection.exec(&query).unwrap();
 
 
-        query = Query::new("INSERT INTO users(id, name) VALUES (1, 'mario'), (2, 'giovanni'), (3, 'sandro');");
+        query = Query::new("INSERT INTO users(id, name, surname) VALUES (1, 'mario', 'rossi'), (2, 'giovanni', 'andreotti'), (3, 'sandro', 'chiesa');");
 
         connection.exec(&query).unwrap();
 
@@ -118,12 +121,12 @@ mod tests {
 
         let result = result.unwrap();
 
-        assert_eq!(result.columns().len(), 2);
+        assert_eq!(result.columns().len(), 3);
         assert_eq!(result.rows().len(), 3);
 
         let row = &result.rows()[0];
 
-        assert_eq!(row.size(), 2);
+        assert_eq!(row.size(), 3);
 
         match &row.content[0] {
             Value::Int(value) => assert_eq!(*value, 1),
@@ -135,7 +138,19 @@ mod tests {
             value => panic!("Expected Value::String('mario'), got {:?}", value),
         }
 
+        match &row.content[2] {
+            Value::String(value) => assert_eq!(*value, "rossi"),
+            value => panic!("Expected Value::String('rossi'), got {:?}", value),
+        }
 
+        for row in result.rows() {
+            println!("row: {}", row)
+        }
+
+        let dataframe = result.dataframe().unwrap();
+
+        println!("{dataframe}");
+        
         
 
 

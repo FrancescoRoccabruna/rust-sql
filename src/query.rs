@@ -1,4 +1,4 @@
-use crate::{postgres_protocol::message::ServerMessage, table::{Column, Row}};
+use crate::table::{Column, Dataframe, DfError, Row};
 
 
 pub struct Query {
@@ -36,11 +36,11 @@ impl  QueryResult {
     //    self.messages.push(message);
     //}
 
-    pub fn set_columns(&mut self, columns: Vec<Column>){
+    pub(crate) fn set_columns(&mut self, columns: Vec<Column>){
         self.columns = columns;
     }
 
-    pub fn add_row(&mut self, row: Row){
+    pub(crate) fn add_row(&mut self, row: Row){
         self.rows.push(row);
     }
 
@@ -50,5 +50,9 @@ impl  QueryResult {
 
     pub fn columns(&self) -> &[Column] {
         &self.columns
+    }
+
+    pub fn dataframe(self) -> Result<Dataframe, DfError> {
+        Dataframe::new(self.columns, self.rows)
     }
 }
