@@ -1,71 +1,76 @@
 use std::{
+    collections::VecDeque,
     io::{Read, Write},
     net::TcpStream,
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex},
 };
 
 use crate::{
-    backend::{self, Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, query::{Query, QueryResult},
+    DatabaseConfig,
+    backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend},
+    config::DatabaseKind,
+    query::{Query, QueryResult},
 };
 
+#[expect(dead_code)]
+enum ConnectionState {
+    Ready,
+    Busy,
+    InTransaction,
+    Error,
+}
 
-
+/// A connection to a database server.
 pub struct Connection {
     host: String,
     port: u16,
     kind: DatabaseKind,
     stream: Option<TcpStream>,
+    state: ConnectionState,
 }
 
 impl Connection {
+    /// Creates a new database connection configuration.
     pub fn new(host: String, port: u16, kind: DatabaseKind) -> Self {
         Self {
             host,
             port,
             kind,
             stream: None,
+            state: ConnectionState::Ready,
         }
     }
 
     fn connect_tcp(&mut self) -> Result<(), DbError> {
         let address = format!("{}:{}", self.host, self.port);
 
-        let stream = TcpStream::connect(address)
-            .map_err( |error| {
-                DbError::new(error.to_string())
-            })?;
+        let stream =
+            TcpStream::connect(address).map_err(|error| DbError::new(error.to_string()))?;
 
         self.stream = Some(stream);
 
         Ok(())
     }
 
-
-    pub fn open(
-        &mut self,
-        username: &str,
-        password: &str,
-        db_name: &str
-    ) -> Result<(), DbError> {
-
+    /// Opens the connection and authenticates with the database server.
+    pub fn open(&mut self, username: &str, password: &str, db_name: &str) -> Result<(), DbError> {
         self.connect_tcp()?;
 
         match &self.kind {
             DatabaseKind::Postgres => {
                 let mut backend = PostgresBackend::new(self);
-                return backend.open(username, password, db_name);
+                backend.open(username, password, db_name)
             }
 
             DatabaseKind::MySql => {
                 let mut backend = MysqlBackend::new(self);
-                return backend.open(username, password, db_name);
-            }
-
-            _ => {
-                todo!()
+                backend.open(username, password, db_name)
             }
         }
     }
 
+    /// Returns `true` if the underlying TCP connection is open.
     pub fn is_open(&self) -> bool {
         self.stream.is_some()
     }
@@ -75,15 +80,15 @@ impl Connection {
             Some(stream) => {
                 stream
                     .write_all(data)
-                    .map_err( |e| DbError::new(e.to_string()))?;
+                    .map_err(|e| DbError::new(e.to_string()))?;
 
                 Ok(())
             }
-            None => Err(DbError::new(String::from("Connection is not open")))
+            None => Err(DbError::new(String::from("Connection is not open"))),
         }
     }
 
-    pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<(), DbError>{
+    pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<(), DbError> {
         let stream = match &mut self.stream {
             Some(stream) => stream,
             None => {
@@ -98,41 +103,222 @@ impl Connection {
         Ok(())
     }
 
+    /// Executes a SQL query.
+    pub fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+        match &self.state {
+            ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
+            ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
 
-    pub fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError>{
+            _ => {}
+        }
 
-        match &self.kind {
+        self.state = ConnectionState::Busy;
+
+        let result = match &self.kind {
             DatabaseKind::Postgres => {
                 let mut backend = PostgresBackend::new(self);
 
-                return backend.exec(query);
+                backend.exec(query)
             }
 
             DatabaseKind::MySql => {
                 let mut backend = MysqlBackend::new(self);
 
-                return backend.exec(query);
+                backend.exec(query)
             }
+        };
 
-            _ => {
-                todo!()
-            }
+        self.state = ConnectionState::Ready;
 
-        }
+        result
     }
 }
 
-
+/// Error returned by database operations.
 #[derive(Debug)]
 pub struct DbError {
-    pub message: String
+    pub message: String,
 }
 
 impl DbError {
+    /// Creates a new database error.
     pub fn new(message: String) -> Self {
-        Self {
-            message,
+        Self { message }
+    }
+}
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for DbError {}
+
+struct PoolInner {
+    connections: VecDeque<Connection>,
+    total_connections: usize,
+}
+
+/// A pool of reusable database connections.
+#[derive(Clone)]
+pub struct ConnectionPool {
+    inner: Arc<Mutex<PoolInner>>,
+    config: Arc<DatabaseConfig>,
+    expand: bool,
+    max_connections: usize,
+}
+
+impl ConnectionPool {
+    /// Creates a new connection pool.
+    pub fn new(
+        config: DatabaseConfig,
+        default_connections: usize,
+        max_connections: usize,
+        expand: bool,
+    ) -> Result<Self, DbError> {
+        let mut connections = VecDeque::with_capacity(max_connections);
+
+        if max_connections != 0 && default_connections > max_connections {
+            return Err(DbError::new(String::from(
+                "default connections exceeded max connections",
+            )));
+        }
+
+        for _ in 0..default_connections {
+            let connection = config.connect()?;
+
+            connections.push_back(connection);
+        }
+
+        Ok(Self {
+            inner: Arc::new(Mutex::new(PoolInner {
+                connections,
+                total_connections: default_connections,
+            })),
+            config: Arc::new(config),
+            expand,
+            max_connections,
+        })
+    }
+
+    /// Acquires a connection from the pool.
+    pub fn get(&self) -> Result<PooledConnection, DbError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+
+        if self.expand
+            && inner.connections.is_empty()
+            && (inner.total_connections < self.max_connections || self.max_connections == 0)
+        {
+            drop(inner);
+
+            let connection = self.config.connect()?;
+
+            inner = self
+                .inner
+                .lock()
+                .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+
+            inner.connections.push_back(connection);
+            inner.total_connections += 1;
+        }
+
+        let conn = inner
+            .connections
+            .pop_front()
+            .ok_or_else(|| DbError::new(String::from("No available connection")))?;
+
+        Ok(PooledConnection {
+            conn: Some(conn),
+            inner: Arc::clone(&self.inner),
+        })
+    }
+
+    /// Returns the number of currently available connections.
+    pub fn available_connections(&self) -> Result<usize, DbError> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+
+        Ok(inner.connections.len())
+    }
+
+    /// Returns the total number of connections managed by the pool.
+    pub fn total_connections(&self) -> Result<usize, DbError> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+
+        Ok(inner.total_connections)
+    }
+}
+
+/// A database connection borrowed from a [`ConnectionPool`].
+pub struct PooledConnection {
+    conn: Option<Connection>,
+    inner: Arc<Mutex<PoolInner>>,
+}
+
+impl Deref for PooledConnection {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        self.conn.as_ref().unwrap()
+    }
+}
+
+impl DerefMut for PooledConnection {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.conn.as_mut().unwrap()
+    }
+}
+
+impl Drop for PooledConnection {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take()
+            && let Ok(mut inner) = self.inner.lock()
+        {
+            inner.connections.push_back(conn);
         }
     }
 }
 
+/// A session that executes queries using connections from a pool.
+pub struct Session {
+    pool: Arc<ConnectionPool>,
+}
+
+impl Session {
+    fn new(pool: Arc<ConnectionPool>) -> Self {
+        Self { pool }
+    }
+
+    pub fn exec(&self, query: &Query) -> Result<QueryResult, DbError> {
+        let mut connection = self.pool.get()?;
+
+        connection.exec(query)
+    }
+}
+
+/// Creates sessions backed by a connection pool.
+pub struct SessionMaker {
+    pool: Arc<ConnectionPool>,
+}
+
+impl SessionMaker {
+    pub fn new(config: DatabaseConfig) -> Result<Self, DbError> {
+        let pool = ConnectionPool::new(config, 2, 5, true)?;
+
+        Ok(Self {
+            pool: Arc::new(pool),
+        })
+    }
+
+    pub fn session(&self) -> Session {
+        Session::new(self.pool.clone())
+    }
+}

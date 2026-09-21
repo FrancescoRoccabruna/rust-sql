@@ -1,4 +1,14 @@
-use crate::{Connection, DbError, backend::Backend, postgres_protocol::{authentication::AuthKind, message::{Message, ServerMessage}, result::ResultParser, scram::ScramClient}, query::{Query, QueryResult}};
+use crate::{
+    Connection, DbError,
+    backend::Backend,
+    postgres_protocol::{
+        authentication::AuthKind,
+        message::{Message, ServerMessage},
+        result::ResultParser,
+        scram::ScramClient,
+    },
+    query::{Query, QueryResult},
+};
 
 pub struct PostgresBackend<'a> {
     connection: &'a mut Connection,
@@ -16,7 +26,6 @@ impl<'a> PostgresBackend<'a> {
         Ok(())
     }
 
-
     fn read_message(&mut self) -> Result<Message, DbError> {
         let mut type_buffer = [0u8; 1]; //il tipo non è incluso nella lunghezza
 
@@ -31,9 +40,9 @@ impl<'a> PostgresBackend<'a> {
         let length = u32::from_be_bytes(length_buffer);
 
         if length < 4 {
-            return Err(DbError::new(
-                String::from("Invalid PostgreSQL message length")
-            ));
+            return Err(DbError::new(String::from(
+                "Invalid PostgreSQL message length",
+            )));
         }
 
         let payload_length = length - 4; //la lunghezza del length stesso
@@ -45,31 +54,24 @@ impl<'a> PostgresBackend<'a> {
         Ok(Message::new(message_type, payload))
     }
 
-
     fn authenticate_scram(
         &mut self,
         mechanisms: Vec<String>,
         username: &str,
         password: &str,
     ) -> Result<(), DbError> {
-
         let mechanism = mechanisms
             .iter()
             .find(|m| *m == "SCRAM-SHA-256")
             .ok_or_else(|| {
-                DbError::new(
-                    String::from("SCRAM-SHA-256 is not supported by server")
-                )
+                DbError::new(String::from("SCRAM-SHA-256 is not supported by server"))
             })?;
 
         let mut scram = ScramClient::new(username, password);
 
         let first_message = scram.first_message();
 
-        let message = Message::sasl_initial_response(
-            mechanism,
-            &first_message,
-        );
+        let message = Message::sasl_initial_response(mechanism, &first_message);
 
         self.connection.write(&message)?;
 
@@ -82,7 +84,7 @@ impl<'a> PostgresBackend<'a> {
                 let auth = AuthKind::parse(&payload)?;
 
                 match auth {
-                    AuthKind::SASLContinue(message) => {
+                    AuthKind::SaslContinue(message) => {
                         scram.handle_server_first(&message)?;
 
                         let final_message = scram.final_message()?;
@@ -98,28 +100,32 @@ impl<'a> PostgresBackend<'a> {
                                 let auth = AuthKind::parse(&payload)?;
 
                                 match auth {
-                                    AuthKind::SASLFinal(message) => {
+                                    AuthKind::SaslFinal(message) => {
                                         scram.handle_server_final(&message)?;
                                     }
                                     _ => {
-                                        return Err(DbError::new(
-                                            String::from("Expected SASL final message")
-                                        ));
+                                        return Err(DbError::new(String::from(
+                                            "Expected Sasl final message",
+                                        )));
                                     }
                                 }
                             }
                             _ => {
-                                return Err(DbError::new(String::from("Expected Authentication message")));
+                                return Err(DbError::new(String::from(
+                                    "Expected Authentication message",
+                                )));
                             }
                         }
                     }
                     _ => {
-                        return Err(DbError::new(String::from("Expected SASL Continue message")));
+                        return Err(DbError::new(String::from("Expected Sasl Continue message")));
                     }
                 }
             }
             _ => {
-                return Err(DbError::new(String::from("Expected Authentication message")));
+                return Err(DbError::new(String::from(
+                    "Expected Authentication message",
+                )));
             }
         }
 
@@ -128,13 +134,7 @@ impl<'a> PostgresBackend<'a> {
 }
 
 impl<'a> Backend for PostgresBackend<'a> {
-    fn open(
-        &mut self,
-        username: &str,
-        password: &str,
-        db_name: &str,
-    ) -> Result<(), DbError> {
-
+    fn open(&mut self, username: &str, password: &str, db_name: &str) -> Result<(), DbError> {
         self.send_startup(username, db_name)?;
 
         let message = self.read_message()?;
@@ -142,41 +142,35 @@ impl<'a> Backend for PostgresBackend<'a> {
 
         match message {
             ServerMessage::Authentication(payload) => {
-
-
                 let auth = AuthKind::parse(&payload)?;
 
+                if let AuthKind::Sasl(mechanisms) = auth {
+                    self.authenticate_scram(mechanisms, username, password)?;
 
-                match auth {
-                    AuthKind::SASL(mechanisms) => {
-                        self.authenticate_scram(mechanisms, username, password)?;
+                    loop {
+                        let message = self.read_message()?;
+                        let message = message.parse();
 
-
-                        loop {
-                            let message = self.read_message()?;
-                            let message = message.parse();
-
-                            match message {
-                                ServerMessage::ReadyForQuery(_) => {
-                                    return Ok(());
-                                }
-
-                                ServerMessage::Unknown(message_type, _ ) => {
-                                    return Err(DbError::new(format!("Unknown message type: {}", message_type)));
-                                }
-
-                                _ => {}
+                        match message {
+                            ServerMessage::ReadyForQuery(_) => {
+                                return Ok(());
                             }
+
+                            ServerMessage::Unknown(message_type, _) => {
+                                return Err(DbError::new(format!(
+                                    "Unknown message type: {}",
+                                    message_type
+                                )));
+                            }
+
+                            _ => {}
                         }
                     }
-                    _ => {}
                 }
             }
 
             ServerMessage::ErrorResponse(payload) => {
-                return Err(DbError::new(
-                    format!("PostgreSQL error: {:?}", payload)
-                ));
+                return Err(DbError::new(format!("PostgreSQL error: {:?}", payload)));
             }
 
             _ => {}
@@ -185,11 +179,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-
-
-
     fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {
-
         let message = Message::query(query.sql());
         self.connection.write(&message)?;
 
@@ -223,14 +213,17 @@ impl<'a> Backend for PostgresBackend<'a> {
                 }
 
                 ServerMessage::DataRow(payload) => {
-                    let row = ResultParser::parse_data_row(&payload, &columns, &type_oids, &format_codes)?;
+                    let row = ResultParser::parse_data_row(
+                        &payload,
+                        &columns,
+                        &type_oids,
+                        &format_codes,
+                    )?;
 
                     result.add_row(row);
                 }
 
-                other => {
-                    //result.add(other);
-                }
+                _ => {}
             }
         }
 

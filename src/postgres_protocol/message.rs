@@ -1,12 +1,9 @@
-
 pub struct Message {
     message_type: u8,
     payload: Vec<u8>,
 }
 
-
 impl Message {
-
     pub fn new(message_type: u8, payload: Vec<u8>) -> Self {
         Self {
             message_type,
@@ -14,10 +11,7 @@ impl Message {
         }
     }
 
-    pub fn startup(
-        username: &str,
-        db_name: &str,
-    ) -> Vec<u8> {
+    pub fn startup(username: &str, db_name: &str) -> Vec<u8> {
         let mut message = Vec::new();
 
         // Placeholder per la lunghezza
@@ -49,11 +43,7 @@ impl Message {
         message
     }
 
-    pub fn sasl_initial_response(
-        mechanism: &str,
-        client_message: &str,
-    ) -> Vec<u8> {
-
+    pub fn sasl_initial_response(mechanism: &str, client_message: &str) -> Vec<u8> {
         let mut message = Vec::new();
 
         // Message type
@@ -62,7 +52,7 @@ impl Message {
         // Placeholder per length
         message.extend_from_slice(&[0, 0, 0, 0]);
 
-        // SASL mechanism
+        // Sasl mechanism
         message.extend_from_slice(mechanism.as_bytes());
         message.push(0);
 
@@ -81,9 +71,7 @@ impl Message {
         message
     }
 
-    pub fn sasl_response(
-        client_message: &str,
-    ) -> Vec<u8> {
+    pub fn sasl_response(client_message: &str) -> Vec<u8> {
         let mut message = Vec::new();
 
         // Message type
@@ -136,6 +124,7 @@ impl Message {
     }
 }
 
+#[expect(dead_code)]
 pub enum ServerMessage {
     Authentication(Vec<u8>),
     ParameterStatus(Vec<u8>),
@@ -150,5 +139,4 @@ pub enum ServerMessage {
     Unknown(u8, Vec<u8>),
 }
 
-impl ServerMessage {
-}
+impl ServerMessage {}

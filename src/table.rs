@@ -1,9 +1,12 @@
 use std::fmt;
 
-
+/// Describes a column returned by a query.
 #[derive(Debug)]
 pub struct Column {
+    /// Column name.
     pub name: String,
+
+    /// Type of values stored in the column.
     pub value_type: ValueType,
 }
 
@@ -11,19 +14,23 @@ impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)
     }
-
 }
 
-
-
+/// A row returned by a database query.
 #[derive(Debug)]
 pub struct Row {
     pub(crate) content: Vec<Value>,
 }
 
 impl Row {
+    /// Returns the number of values in the row.
     pub fn size(&self) -> usize {
         self.content.len()
+    }
+
+    /// Returns the values contained in the row.
+    pub fn values(&self) -> &[Value] {
+        &self.content
     }
 }
 
@@ -41,15 +48,28 @@ impl fmt::Display for Row {
     }
 }
 
-
+/// A value returned by a database query.
 #[derive(Debug)]
 pub enum Value {
+    /// SQL NULL value.
     Null,
+
+    /// Signed integer.
     Int(i64),
+
+    /// Unsigned integer.
     UInt(u64),
+
+    /// Floating-point number.
     Float(f64),
+
+    /// Text value.
     String(String),
+
+    /// Binary data.
     Bytes(Vec<u8>),
+
+    /// Boolean value.
     Bool(bool),
 }
 
@@ -67,18 +87,29 @@ impl fmt::Display for Value {
     }
 }
 
-
+/// Describes the type of a database value.
 #[derive(Debug)]
 pub enum ValueType {
+    /// Signed integer.
     Int,
+
+    /// Unsigned integer.
     UInt,
+
+    /// Floating-point number.
     Float,
+
+    /// Text value.
     String,
+
+    /// Binary data.
     Bytes,
+
+    /// Boolean value.
     Bool,
 }
 
-impl fmt::Display for ValueType{
+impl fmt::Display for ValueType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ValueType::Int => write!(f, "Int"),
@@ -91,36 +122,30 @@ impl fmt::Display for ValueType{
     }
 }
 
-
-
+/// Tabular representation of a query result.
 #[derive(Debug)]
 pub struct Dataframe {
     columns: Vec<Column>,
     rows: Vec<Row>,
 }
 
-
 impl Dataframe {
-    pub fn new(
-        columns: Vec<Column>,
-        rows: Vec<Row>
-    ) -> Result<Self, DfError> {
-        for row in &rows{
+    /// Creates a dataframe from columns and rows.
+    ///
+    /// Returns an error if a row contains a different number of values
+    /// than the number of columns.
+    pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Result<Self, DfError> {
+        for row in &rows {
             if row.size() != columns.len() {
-                return Err(DfError::new(
-                    String::from("Mismatch rows size")
-                ));
+                return Err(DfError::new(String::from("Mismatch rows size")));
             }
         }
 
-        Ok(Self {
-            columns,
-            rows,
-        })
+        Ok(Self { columns, rows })
     }
 }
 
-impl fmt::Display for Dataframe{
+impl fmt::Display for Dataframe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, column) in self.columns.iter().enumerate() {
             if i > 0 {
@@ -138,19 +163,25 @@ impl fmt::Display for Dataframe{
 
         Ok(())
     }
-
 }
 
+/// Error returned when a dataframe cannot be constructed.
 #[derive(Debug)]
 pub struct DfError {
-    pub message: String
+    pub message: String,
 }
-
 
 impl DfError {
+    /// Creates a new dataframe error.
     pub fn new(message: String) -> Self {
-        Self {
-            message,
-        }
+        Self { message }
     }
 }
+
+impl std::fmt::Display for DfError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for DfError {}

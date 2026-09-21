@@ -1,34 +1,28 @@
-use crate::{DbError, table::{Column, Row, Value, ValueType}};
+use crate::{
+    DbError,
+    table::{Column, Row, Value, ValueType},
+};
 
+type RowDescription = (Vec<Column>, Vec<u32>, Vec<i16>);
 
-
-
-pub struct ResultParser {
-
-}
+pub struct ResultParser {}
 
 impl ResultParser {
-     pub fn parse_row_description(
-        payload: &[u8],
-    ) -> Result<(Vec<Column>, Vec<u32>, Vec<i16>), ParserError> {
-
+    pub fn parse_row_description(payload: &[u8]) -> Result<RowDescription, ParserError> {
         if payload.len() < 2 {
-            return Err(ParserError::new(
-                String::from("Invalid RowDescription payload"),
-            ));
+            return Err(ParserError::new(String::from(
+                "Invalid RowDescription payload",
+            )));
         }
 
         let mut offset = 0;
 
-        let number_of_fields =
-            i16::from_be_bytes([payload[offset], payload[offset + 1]]);
+        let number_of_fields = i16::from_be_bytes([payload[offset], payload[offset + 1]]);
 
         offset += 2;
 
         if number_of_fields < 0 {
-            return Err(ParserError::new(
-                String::from("Invalid number of fields"),
-            ));
+            return Err(ParserError::new(String::from("Invalid number of fields")));
         }
 
         let mut columns = Vec::new();
@@ -47,10 +41,7 @@ impl ResultParser {
 
             let value_type = Self::value_type_from_oid(type_oid)?;
 
-            let column = Column {
-                name,
-                value_type,
-            };
+            let column = Column { name, value_type };
 
             columns.push(column);
             type_oids.push(type_oid);
@@ -60,24 +51,14 @@ impl ResultParser {
         Ok((columns, type_oids, format_codes))
     }
 
-
-    fn read_string(
-        payload: &[u8],
-        offset: &mut usize,
-    ) -> Result<String, ParserError> {
+    fn read_string(payload: &[u8], offset: &mut usize) -> Result<String, ParserError> {
         let start = *offset;
 
         while *offset < payload.len() {
             if payload[*offset] == 0 {
-                let value = std::str::from_utf8(
-                    &payload[start..*offset]
-                )
-                .map_err(|_| {
-                    ParserError::new(
-                        String::from("Invalid UTF-8 string")
-                    )
-                })?
-                .to_string();
+                let value = std::str::from_utf8(&payload[start..*offset])
+                    .map_err(|_| ParserError::new(String::from("Invalid UTF-8 string")))?
+                    .to_string();
 
                 *offset += 1;
 
@@ -87,19 +68,12 @@ impl ResultParser {
             *offset += 1;
         }
 
-        Err(ParserError::new(
-            String::from("Missing null terminator"),
-        ))
+        Err(ParserError::new(String::from("Missing null terminator")))
     }
 
-    fn read_u32(
-        payload: &[u8],
-        offset: &mut usize,
-    ) -> Result<u32, ParserError> {
+    fn read_u32(payload: &[u8], offset: &mut usize) -> Result<u32, ParserError> {
         if *offset + 4 > payload.len() {
-            return Err(ParserError::new(
-                String::from("Unexpected end of payload"),
-            ));
+            return Err(ParserError::new(String::from("Unexpected end of payload")));
         }
 
         let value = u32::from_be_bytes([
@@ -114,34 +88,21 @@ impl ResultParser {
         Ok(value)
     }
 
-    fn read_i16(
-        payload: &[u8],
-        offset: &mut usize,
-    ) -> Result<i16, ParserError> {
+    fn read_i16(payload: &[u8], offset: &mut usize) -> Result<i16, ParserError> {
         if *offset + 2 > payload.len() {
-            return Err(ParserError::new(
-                String::from("Unexpected end of payload"),
-            ));
+            return Err(ParserError::new(String::from("Unexpected end of payload")));
         }
 
-        let value = i16::from_be_bytes([
-            payload[*offset],
-            payload[*offset + 1],
-        ]);
+        let value = i16::from_be_bytes([payload[*offset], payload[*offset + 1]]);
 
         *offset += 2;
 
         Ok(value)
     }
 
-    fn read_i32(
-        payload: &[u8],
-        offset: &mut usize,
-    ) -> Result<i32, ParserError> {
+    fn read_i32(payload: &[u8], offset: &mut usize) -> Result<i32, ParserError> {
         if *offset + 4 > payload.len() {
-            return Err(ParserError::new(
-                String::from("Unexpected end of payload"),
-            ));
+            return Err(ParserError::new(String::from("Unexpected end of payload")));
         }
 
         let value = i32::from_be_bytes([
@@ -158,19 +119,20 @@ impl ResultParser {
 
     fn value_type_from_oid(type_oid: u32) -> Result<ValueType, ParserError> {
         match type_oid {
-            16 => Ok(ValueType::Bool),   // bool
-            20 => Ok(ValueType::Int),    // int8
-            21 => Ok(ValueType::Int),    // int2
-            23 => Ok(ValueType::Int),    // int4
-            700 => Ok(ValueType::Float), // float4
-            701 => Ok(ValueType::Float), // float8
-            25 => Ok(ValueType::String), // text
+            16 => Ok(ValueType::Bool),     // bool
+            20 => Ok(ValueType::Int),      // int8
+            21 => Ok(ValueType::Int),      // int2
+            23 => Ok(ValueType::Int),      // int4
+            700 => Ok(ValueType::Float),   // float4
+            701 => Ok(ValueType::Float),   // float8
+            25 => Ok(ValueType::String),   // text
             1043 => Ok(ValueType::String), // varchar
-            1700 => Ok(ValueType::Float), // numeric
+            1700 => Ok(ValueType::Float),  // numeric
 
-            _ => Err(ParserError::new(
-                format!("Unsupported PostgreSQL type OID: {}", type_oid)
-            )),
+            _ => Err(ParserError::new(format!(
+                "Unsupported PostgreSQL type OID: {}",
+                type_oid
+            ))),
         }
     }
 
@@ -185,17 +147,17 @@ impl ResultParser {
         }
 
         if length < 0 {
-            return Err(ParserError::new(
-                String::from("Invalid DataRow value length"),
-            ));
+            return Err(ParserError::new(String::from(
+                "Invalid DataRow value length",
+            )));
         }
 
         let length = length as usize;
 
         if *offset + length > payload.len() {
-            return Err(ParserError::new(
-                String::from("Unexpected end of DataRow payload"),
-            ));
+            return Err(ParserError::new(String::from(
+                "Unexpected end of DataRow payload",
+            )));
         }
 
         let value = &payload[*offset..*offset + length];
@@ -212,45 +174,33 @@ impl ResultParser {
         format_codes: &[i16],
     ) -> Result<Row, ParserError> {
         if payload.len() < 2 {
-            return Err(ParserError::new(
-                String::from("Invalid DataRow payload"),
-            ));
+            return Err(ParserError::new(String::from("Invalid DataRow payload")));
         }
 
         let mut offset = 0;
 
-        let number_of_columns =
-            Self::read_i16(payload, &mut offset)?;
+        let number_of_columns = Self::read_i16(payload, &mut offset)?;
 
         if number_of_columns < 0 {
-            return Err(ParserError::new(
-                String::from("Invalid number of columns"),
-            ));
+            return Err(ParserError::new(String::from("Invalid number of columns")));
         }
 
         if number_of_columns as usize != columns.len() {
-            return Err(ParserError::new(
-                String::from("DataRow columns mismatch"),
-            ));
+            return Err(ParserError::new(String::from("DataRow columns mismatch")));
         }
 
         if format_codes.len() != columns.len() {
-            return Err(ParserError::new(
-                String::from("Format codes mismatch"),
-            ));
+            return Err(ParserError::new(String::from("Format codes mismatch")));
         }
 
         if type_oids.len() != columns.len() {
-            return Err(ParserError::new(
-                String::from("Type OIDs mismatch"),
-            ));
+            return Err(ParserError::new(String::from("Type OIDs mismatch")));
         }
 
         let mut values = Vec::with_capacity(columns.len());
 
         for index in 0..columns.len() {
-            let raw_value =
-                Self::read_value(payload, &mut offset)?;
+            let raw_value = Self::read_value(payload, &mut offset)?;
 
             let value = Self::decode_value(
                 raw_value,
@@ -262,11 +212,8 @@ impl ResultParser {
             values.push(value);
         }
 
-        Ok(Row {
-            content: values,
-        })
+        Ok(Row { content: values })
     }
-
 
     fn decode_value(
         raw: Option<&[u8]>,
@@ -281,76 +228,49 @@ impl ResultParser {
         match format_code {
             0 => Self::decode_text_value(raw, value_type),
             1 => Self::decode_binary_value(raw, value_type, type_oid),
-            _ => Err(ParserError::new(
-                String::from("Unsupported PostgreSQL format code"),
-            )),
+            _ => Err(ParserError::new(String::from(
+                "Unsupported PostgreSQL format code",
+            ))),
         }
     }
 
-    fn decode_text_value(
-        raw: &[u8],
-        value_type: &ValueType,
-    ) -> Result<Value, ParserError> {
+    fn decode_text_value(raw: &[u8], value_type: &ValueType) -> Result<Value, ParserError> {
         match value_type {
-            ValueType::Bool => {
-                match raw {
-                    b"t" => Ok(Value::Bool(true)),
-                    b"f" => Ok(Value::Bool(false)),
-                    _ => Err(ParserError::new(
-                        String::from("Invalid PostgreSQL boolean"),
-                    )),
-                }
-            }
+            ValueType::Bool => match raw {
+                b"t" => Ok(Value::Bool(true)),
+                b"f" => Ok(Value::Bool(false)),
+                _ => Err(ParserError::new(String::from("Invalid PostgreSQL boolean"))),
+            },
 
             ValueType::Int => {
                 let value = std::str::from_utf8(raw)
-                    .map_err(|_| {
-                        ParserError::new(
-                            String::from("Invalid UTF-8 integer"),
-                        )
-                    })?
+                    .map_err(|_| ParserError::new(String::from("Invalid UTF-8 integer")))?
                     .parse::<i64>()
-                    .map_err(|_| {
-                        ParserError::new(
-                            String::from("Invalid PostgreSQL integer"),
-                        )
-                    })?;
+                    .map_err(|_| ParserError::new(String::from("Invalid PostgreSQL integer")))?;
 
                 Ok(Value::Int(value))
             }
 
             ValueType::Float => {
                 let value = std::str::from_utf8(raw)
-                    .map_err(|_| {
-                        ParserError::new(
-                            String::from("Invalid UTF-8 float"),
-                        )
-                    })?
+                    .map_err(|_| ParserError::new(String::from("Invalid UTF-8 float")))?
                     .parse::<f64>()
-                    .map_err(|_| {
-                        ParserError::new(
-                            String::from("Invalid PostgreSQL float"),
-                        )
-                    })?;
+                    .map_err(|_| ParserError::new(String::from("Invalid PostgreSQL float")))?;
 
                 Ok(Value::Float(value))
             }
 
             ValueType::String => {
                 let value = std::str::from_utf8(raw)
-                    .map_err(|_| {
-                        ParserError::new(
-                            String::from("Invalid UTF-8 string"),
-                        )
-                    })?
+                    .map_err(|_| ParserError::new(String::from("Invalid UTF-8 string")))?
                     .to_string();
 
                 Ok(Value::String(value))
             }
 
-            _ => Err(ParserError::new(
-                String::from("Unsupported PostgreSQL text type"),
-            )),
+            _ => Err(ParserError::new(String::from(
+                "Unsupported PostgreSQL text type",
+            ))),
         }
     }
 
@@ -362,153 +282,98 @@ impl ResultParser {
         match value_type {
             ValueType::Bool => {
                 if raw.len() != 1 {
-                    return Err(ParserError::new(
-                        String::from("Invalid PostgreSQL boolean"),
-                    ));
+                    return Err(ParserError::new(String::from("Invalid PostgreSQL boolean")));
                 }
 
                 match raw[0] {
                     0 => Ok(Value::Bool(false)),
                     1 => Ok(Value::Bool(true)),
-                    _ => Err(ParserError::new(
-                        String::from("Invalid PostgreSQL boolean"),
-                    )),
+                    _ => Err(ParserError::new(String::from("Invalid PostgreSQL boolean"))),
                 }
             }
 
-            ValueType::Int => {
-                match type_oid {
-                    21 => {
-                        if raw.len() != 2 {
-                            return Err(ParserError::new(
-                                String::from("Invalid int2 value"),
-                            ));
-                        }
-
-                        let value = i16::from_be_bytes([
-                            raw[0],
-                            raw[1],
-                        ]);
-
-                        Ok(Value::Int(value as i64))
+            ValueType::Int => match type_oid {
+                21 => {
+                    if raw.len() != 2 {
+                        return Err(ParserError::new(String::from("Invalid int2 value")));
                     }
 
-                    23 => {
-                        if raw.len() != 4 {
-                            return Err(ParserError::new(
-                                String::from("Invalid int4 value"),
-                            ));
-                        }
+                    let value = i16::from_be_bytes([raw[0], raw[1]]);
 
-                        let value = i32::from_be_bytes([
-                            raw[0],
-                            raw[1],
-                            raw[2],
-                            raw[3],
-                        ]);
-
-                        Ok(Value::Int(value as i64))
-                    }
-
-                    20 => {
-                        if raw.len() != 8 {
-                            return Err(ParserError::new(
-                                String::from("Invalid int8 value"),
-                            ));
-                        }
-
-                        let value = i64::from_be_bytes([
-                            raw[0],
-                            raw[1],
-                            raw[2],
-                            raw[3],
-                            raw[4],
-                            raw[5],
-                            raw[6],
-                            raw[7],
-                        ]);
-
-                        Ok(Value::Int(value))
-                    }
-
-                    _ => Err(ParserError::new(
-                        format!(
-                            "Unsupported PostgreSQL integer OID: {}",
-                            type_oid
-                        ),
-                    )),
+                    Ok(Value::Int(value as i64))
                 }
-            }
 
-            ValueType::Float => {
-                match type_oid {
-                    700 => {
-                        if raw.len() != 4 {
-                            return Err(ParserError::new(
-                                String::from("Invalid float4 value"),
-                            ));
-                        }
-
-                        let bits = u32::from_be_bytes([
-                            raw[0],
-                            raw[1],
-                            raw[2],
-                            raw[3],
-                        ]);
-
-                        Ok(Value::Float(f32::from_bits(bits) as f64))
+                23 => {
+                    if raw.len() != 4 {
+                        return Err(ParserError::new(String::from("Invalid int4 value")));
                     }
 
-                    701 => {
-                        if raw.len() != 8 {
-                            return Err(ParserError::new(
-                                String::from("Invalid float8 value"),
-                            ));
-                        }
+                    let value = i32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
 
-                        let bits = u64::from_be_bytes([
-                            raw[0],
-                            raw[1],
-                            raw[2],
-                            raw[3],
-                            raw[4],
-                            raw[5],
-                            raw[6],
-                            raw[7],
-                        ]);
-
-                        Ok(Value::Float(f64::from_bits(bits)))
-                    }
-
-                    _ => Err(ParserError::new(
-                        format!(
-                            "Unsupported PostgreSQL float OID: {}",
-                            type_oid
-                        ),
-                    )),
+                    Ok(Value::Int(value as i64))
                 }
-            }
+
+                20 => {
+                    if raw.len() != 8 {
+                        return Err(ParserError::new(String::from("Invalid int8 value")));
+                    }
+
+                    let value = i64::from_be_bytes([
+                        raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+                    ]);
+
+                    Ok(Value::Int(value))
+                }
+
+                _ => Err(ParserError::new(format!(
+                    "Unsupported PostgreSQL integer OID: {}",
+                    type_oid
+                ))),
+            },
+
+            ValueType::Float => match type_oid {
+                700 => {
+                    if raw.len() != 4 {
+                        return Err(ParserError::new(String::from("Invalid float4 value")));
+                    }
+
+                    let bits = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
+
+                    Ok(Value::Float(f32::from_bits(bits) as f64))
+                }
+
+                701 => {
+                    if raw.len() != 8 {
+                        return Err(ParserError::new(String::from("Invalid float8 value")));
+                    }
+
+                    let bits = u64::from_be_bytes([
+                        raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+                    ]);
+
+                    Ok(Value::Float(f64::from_bits(bits)))
+                }
+
+                _ => Err(ParserError::new(format!(
+                    "Unsupported PostgreSQL float OID: {}",
+                    type_oid
+                ))),
+            },
 
             ValueType::String => {
                 let value = std::str::from_utf8(raw)
-                    .map_err(|_| {
-                        ParserError::new(
-                            String::from("Invalid UTF-8 string"),
-                        )
-                    })?
+                    .map_err(|_| ParserError::new(String::from("Invalid UTF-8 string")))?
                     .to_string();
 
                 Ok(Value::String(value))
             }
 
-            _ => Err(ParserError::new(
-                String::from("Unsupported PostgreSQL binary type"),
-            )),
+            _ => Err(ParserError::new(String::from(
+                "Unsupported PostgreSQL binary type",
+            ))),
         }
     }
 }
-
-
 
 pub struct ParserError {
     message: String,
@@ -516,9 +381,7 @@ pub struct ParserError {
 
 impl ParserError {
     pub fn new(message: String) -> Self {
-        Self {
-            message
-        }
+        Self { message }
     }
 }
 

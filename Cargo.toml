@@ -2,12 +2,16 @@
 name = "rust-sql"
 version = "0.1.0"
 edition = "2024"
+description = "A Rust client library for PostgreSQL and MySQL"
+license = "MIT"
+keywords = ["sql", "postgres", "mysql", "database", "client"]
+categories = ["database"]
 
 [dependencies]
-rand = "0.9"
-sha2 = "0.10"
-sha1 = "0.10"
-hmac = "0.12"
-rsa  = "0.9"
-pbkdf2 = "0.12"
 base64 = "0.22"
+hmac = "0.12"
+pbkdf2 = "0.12"
+rand = "0.9"
+rsa = "0.9"
+sha1 = "0.10"
+sha2 = "0.10"
