@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     net::TcpStream,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
 };
 
 use crate::{
@@ -163,7 +163,7 @@ struct PoolInner {
 /// A pool of reusable database connections.
 #[derive(Clone)]
 pub struct ConnectionPool {
-    inner: Arc<Mutex<PoolInner>>,
+    inner: Arc<(Mutex<PoolInner>, Condvar)>,
     config: Arc<DatabaseConfig>,
     expand: bool,
     max_connections: usize,
@@ -192,10 +192,13 @@ impl ConnectionPool {
         }
 
         Ok(Self {
-            inner: Arc::new(Mutex::new(PoolInner {
-                connections,
-                total_connections: default_connections,
-            })),
+            inner: Arc::new((
+                Mutex::new(PoolInner {
+                    connections,
+                    total_connections: default_connections,
+                }),
+                Condvar::new(),
+            )),
             config: Arc::new(config),
             expand,
             max_connections,
@@ -206,6 +209,7 @@ impl ConnectionPool {
     pub fn get(&self) -> Result<PooledConnection, DbError> {
         let mut inner = self
             .inner
+            .0
             .lock()
             .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
 
@@ -219,11 +223,14 @@ impl ConnectionPool {
 
             inner = self
                 .inner
+                .0
                 .lock()
                 .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
 
-            inner.connections.push_back(connection);
-            inner.total_connections += 1;
+            if inner.total_connections < self.max_connections || self.max_connections == 0 {
+                inner.connections.push_back(connection);
+                inner.total_connections += 1;
+            }
         }
 
         let conn = inner
@@ -237,10 +244,55 @@ impl ConnectionPool {
         })
     }
 
+    /// Acquires a connection from the pool, waiting if none are available.
+    pub fn get_wait(&self) -> Result<PooledConnection, DbError> {
+        let mut inner = self
+            .inner
+            .0
+            .lock()
+            .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+
+        if self.expand
+            && inner.connections.is_empty()
+            && (inner.total_connections < self.max_connections || self.max_connections == 0)
+        {
+            drop(inner);
+
+            let connection = self.config.connect()?;
+
+            inner = self
+                .inner
+                .0
+                .lock()
+                .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+
+            if inner.total_connections < self.max_connections || self.max_connections == 0 {
+                inner.connections.push_back(connection);
+                inner.total_connections += 1;
+            }
+        }
+
+        loop {
+            if let Some(conn) = inner.connections.pop_front() {
+                return Ok(PooledConnection {
+                    conn: Some(conn),
+                    inner: Arc::clone(&self.inner),
+                });
+            }
+
+            inner = self
+                .inner
+                .1
+                .wait(inner)
+                .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
+        }
+    }
+
     /// Returns the number of currently available connections.
     pub fn available_connections(&self) -> Result<usize, DbError> {
         let inner = self
             .inner
+            .0
             .lock()
             .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
 
@@ -251,6 +303,7 @@ impl ConnectionPool {
     pub fn total_connections(&self) -> Result<usize, DbError> {
         let inner = self
             .inner
+            .0
             .lock()
             .map_err(|_| DbError::new(String::from("Connection pool lock error")))?;
 
@@ -261,7 +314,7 @@ impl ConnectionPool {
 /// A database connection borrowed from a [`ConnectionPool`].
 pub struct PooledConnection {
     conn: Option<Connection>,
-    inner: Arc<Mutex<PoolInner>>,
+    inner: Arc<(Mutex<PoolInner>, Condvar)>,
 }
 
 impl Deref for PooledConnection {
@@ -280,9 +333,10 @@ impl DerefMut for PooledConnection {
 impl Drop for PooledConnection {
     fn drop(&mut self) {
         if let Some(conn) = self.conn.take()
-            && let Ok(mut inner) = self.inner.lock()
+            && let Ok(mut inner) = self.inner.0.lock()
         {
             inner.connections.push_back(conn);
+            self.inner.1.notify_one();
         }
     }
 }
@@ -298,7 +352,7 @@ impl Session {
     }
 
     pub fn exec(&self, query: &Query) -> Result<QueryResult, DbError> {
-        let mut connection = self.pool.get()?;
+        let mut connection = self.pool.get_wait()?;
 
         connection.exec(query)
     }
