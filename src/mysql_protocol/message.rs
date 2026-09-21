@@ -1,22 +1,21 @@
-use crate::DbError;
-use sha2::{Digest, Sha256};
-
+pub const OK_PACKET: u8 = 0x00;
+pub const ERR_PACKET: u8 = 0xFF;
 
 pub struct Message {
-    pub(crate) message_type: u8,
     pub(crate) sequence_id: u8,
     pub(crate) payload: Vec<u8>,
 }
 
-
 impl Message {
-
-    pub fn new(message_type: u8, sequence_id: u8, payload: Vec<u8>) -> Self {
+    pub fn new(sequence_id: u8, payload: Vec<u8>) -> Self {
         Self {
-            message_type,
             sequence_id,
             payload,
         }
+    }
+
+    pub fn message_type(&self) -> Option<u8> {
+        self.payload.first().copied()
     }
 
     pub fn handshake_response(
@@ -63,31 +62,34 @@ impl Message {
     }
 
     pub fn parse(self) -> ServerMessage {
-        match self.message_type {
+        let message_type = self.message_type().unwrap_or(0xFF);
+
+        match message_type {
             0x00 => ServerMessage::Ok(self.payload),
+
             0x0A => ServerMessage::Handshake(self.payload),
+
             0xFF => ServerMessage::Error(self.payload),
+
             0xFE => ServerMessage::Eof(self.payload),
+
             0x01 => ServerMessage::AuthMoreData(self.payload),
 
-            _ => ServerMessage::Unknown(
-                self.message_type,
-                self.payload,
-            ),
+            _ => ServerMessage::Unknown(message_type, self.payload),
         }
     }
 
     pub fn encode(payload: &[u8], sequence_id: u8) -> Vec<u8> {
         let length = payload.len() as u32;
 
-        let mut packet = Vec::new();
+        let mut packet = vec![
+            (length & 0xFF) as u8, // Payload length: 3-byte little endian
+            ((length >> 8) & 0xFF) as u8,
+            ((length >> 16) & 0xFF) as u8,
+            sequence_id, // Sequence ID
+        ];
 
-        packet.push((length & 0xFF) as u8);
-        packet.push(((length >> 8) & 0xFF) as u8);
-        packet.push(((length >> 16) & 0xFF) as u8);
-
-        packet.push(sequence_id);
-
+        // Payload
         packet.extend_from_slice(payload);
 
         packet
@@ -96,14 +98,16 @@ impl Message {
     pub fn query(sql: &str) -> Vec<u8> {
         let mut payload = Vec::new();
 
-        payload.push(0x03); // COM_QUERY
+        // COM_QUERY
+        payload.push(0x03);
+
         payload.extend_from_slice(sql.as_bytes());
 
         payload
     }
-
 }
 
+#[expect(dead_code)]
 pub enum ServerMessage {
     Handshake(Vec<u8>),
     Ok(Vec<u8>),
@@ -115,4 +119,3 @@ pub enum ServerMessage {
     AuthMoreData(Vec<u8>),
     Unknown(u8, Vec<u8>),
 }
-

@@ -1,2 +1,3 @@
+pub mod authentication;
 pub mod message;
-pub(crate) mod authentication;
+pub mod result;
