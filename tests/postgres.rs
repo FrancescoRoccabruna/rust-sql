@@ -409,3 +409,42 @@ fn postgres_connection_pool() {
 
     assert_eq!(pool.available_connections().unwrap(), 2);
 }
+
+#[test]
+fn postgres_connection_pool_wait() {
+    use std::{
+        sync::{Arc, mpsc},
+        thread,
+        time::Duration,
+    };
+
+    let config = postgres_config();
+    let pool = Arc::new(ConnectionPool::new(config, 1, 1, true).unwrap());
+
+    let connection = pool.get().unwrap();
+
+    assert_eq!(pool.total_connections().unwrap(), 1);
+    assert_eq!(pool.available_connections().unwrap(), 0);
+
+    let pool_clone = Arc::clone(&pool);
+    let (sender, receiver) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        let _connection = pool_clone.get_wait().unwrap();
+        sender.send(()).unwrap();
+    });
+
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+        "get_wait() returned before a connection was available"
+    );
+
+    drop(connection);
+
+    assert!(
+        receiver.recv_timeout(Duration::from_secs(1)).is_ok(),
+        "get_wait() did not return after a connection became available"
+    );
+
+    handle.join().unwrap();
+}
