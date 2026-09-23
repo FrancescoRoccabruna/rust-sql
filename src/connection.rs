@@ -57,27 +57,16 @@ impl Connection {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
-            ConnectionState::InTransaction => return Err(DbError::new(String::from("Connection is already in transit"))),
+            ConnectionState::InTransaction => return Err(DbError::new(String::from("Connection is already in a transaction"))),
 
             _ => {}
         }
 
         let query = Query::new("BEGIN TRANSACTION;");
 
-        match &self.kind {
-            DatabaseKind::Postgres => {
-                let mut backend = PostgresBackend::new(self);
+        self.exec(&query)?;
 
-                backend.exec(&query)?;
-            }
-
-            DatabaseKind::MySql => {
-                let mut backend = MysqlBackend::new(self);
-
-                backend.exec(&query)?;
-            }
-        };
-
+        self.state = ConnectionState::InTransaction;
 
         Ok(())
     }
@@ -86,26 +75,18 @@ impl Connection {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
-            ConnectionState::Ready => return Err(DbError::new(String::from("Connection is not in transit"))),
+            ConnectionState::Ready => return Err(DbError::new(String::from("Connection is not in a transaction"))),
 
             _ => {}
         }
 
         let query = Query::new("COMMIT TRANSACTION;");
 
-        let result = match &self.kind {
-            DatabaseKind::Postgres => {
-                let mut backend = PostgresBackend::new(self);
+        let result = self.exec(&query);
 
-                backend.exec(&query)
-            }
-
-            DatabaseKind::MySql => {
-                let mut backend = MysqlBackend::new(self);
-
-                backend.exec(&query)
-            }
-        };
+        if result.is_ok() {
+            self.state = ConnectionState::Ready;
+        }
 
         result
     }
@@ -114,27 +95,16 @@ impl Connection {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
-            ConnectionState::Ready => return Err(DbError::new(String::from("Connection is not in transit"))),
+            ConnectionState::Ready => return Err(DbError::new(String::from("Connection is not in a transaction"))),
 
             _ => {}
         }
 
         let query = Query::new("ROLLBACK TRANSACTION;");
 
-        match &self.kind {
-            DatabaseKind::Postgres => {
-                let mut backend = PostgresBackend::new(self);
+        self.exec(&query)?;
 
-                backend.exec(&query)?;
-            }
-
-            DatabaseKind::MySql => {
-                let mut backend = MysqlBackend::new(self);
-
-                backend.exec(&query)?;
-            }
-        };
-
+        self.state = ConnectionState::Ready;
 
         Ok(())
     }
@@ -198,6 +168,9 @@ impl Connection {
             _ => {}
         }
 
+        let in_transaction =
+            matches!(self.state, ConnectionState::InTransaction);
+
         self.state = ConnectionState::Busy;
 
         let result = match &self.kind {
@@ -214,7 +187,11 @@ impl Connection {
             }
         };
 
-        self.state = ConnectionState::Ready;
+        self.state = if in_transaction {
+            ConnectionState::InTransaction
+        } else {
+            ConnectionState::Ready
+        };
 
         result
     }
@@ -418,9 +395,17 @@ impl DerefMut for PooledConnection {
 
 impl Drop for PooledConnection {
     fn drop(&mut self) {
-        if let Some(conn) = self.conn.take()
-            && let Ok(mut inner) = self.inner.0.lock()
-        {
+        let Some(mut conn) = self.conn.take() else {
+            return;
+        };
+
+        if matches!(conn.state, ConnectionState::InTransaction) {
+            if conn.rollback_transaction().is_err() {
+                return;
+            }
+        }
+
+        if let Ok(mut inner) = self.inner.0.lock() {
             inner.connections.push_back(conn);
             self.inner.1.notify_one();
         }
@@ -449,16 +434,18 @@ impl Session {
         self.statements.push(query);
     }
 
-    pub fn commit(&self){
+    pub fn commit(&self) -> Result<(), DbError>{
         if !self.statements.is_empty() {
-            let mut connection = self.pool.get_wait().unwrap();
+            let mut connection = self.pool.get_wait()?;
 
-            connection.start_transaction().unwrap();
+            connection.start_transaction()?;
 
             for query in &self.statements {
-                connection.exec(&query).unwrap();
+                connection.exec(&query)?;
             }
         }
+
+        Ok(())
     }
 }
 
