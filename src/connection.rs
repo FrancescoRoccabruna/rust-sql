@@ -42,6 +42,14 @@ impl Connection {
         }
     }
 
+    fn backend(&mut self) -> Box<dyn Backend + '_> {
+        match &self.kind {
+            DatabaseKind::Postgres => Box::new(PostgresBackend::new(self)),
+
+            DatabaseKind::MySql => Box::new(MysqlBackend::new(self)),
+        }
+    }
+
     fn connect_tcp(&mut self) -> Result<(), DbError> {
         let address = format!("{}:{}", self.host, self.port);
 
@@ -53,56 +61,72 @@ impl Connection {
         Ok(())
     }
 
-    pub fn start_transaction(&mut self) -> Result<(), DbError>{
+    /// Starts a new database transaction.
+    pub fn start_transaction(&mut self) -> Result<(), DbError> {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
-            ConnectionState::InTransaction => return Err(DbError::new(String::from("Connection is already in a transaction"))),
+            ConnectionState::InTransaction => {
+                return Err(DbError::new(String::from(
+                    "Connection is already in a transaction",
+                )));
+            }
 
             _ => {}
         }
 
-        let query = Query::new("BEGIN TRANSACTION;");
-
-        self.exec(&query)?;
+        {
+            let mut backend = self.backend();
+            backend.start_transaction()?;
+        }
 
         self.state = ConnectionState::InTransaction;
 
         Ok(())
     }
 
-    pub fn commit_transaction(&mut self) -> Result<QueryResult, DbError>{
+    /// Commits the current database transaction.
+    pub fn commit_transaction(&mut self) -> Result<(), DbError> {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
-            ConnectionState::Ready => return Err(DbError::new(String::from("Connection is not in a transaction"))),
+            ConnectionState::Ready => {
+                return Err(DbError::new(String::from(
+                    "Connection is not in a transaction",
+                )));
+            }
 
             _ => {}
         }
 
-        let query = Query::new("COMMIT TRANSACTION;");
-
-        let result = self.exec(&query);
-
-        if result.is_ok() {
-            self.state = ConnectionState::Ready;
+        {
+            let mut backend = self.backend();
+            backend.commit_transaction()?;
         }
 
-        result
+        self.state = ConnectionState::Ready;
+
+        Ok(())
     }
 
-    pub fn rollback_transaction(&mut self) -> Result<(), DbError>{
+    /// Rolls back the current database transaction.
+    pub fn rollback_transaction(&mut self) -> Result<(), DbError> {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
-            ConnectionState::Ready => return Err(DbError::new(String::from("Connection is not in a transaction"))),
+            ConnectionState::Ready => {
+                return Err(DbError::new(String::from(
+                    "Connection is not in a transaction",
+                )));
+            }
 
             _ => {}
         }
 
-        let query = Query::new("ROLLBACK TRANSACTION;");
-
-        self.exec(&query)?;
+        {
+            let mut backend = self.backend();
+            backend.rollback_transaction()?;
+        }
 
         self.state = ConnectionState::Ready;
 
@@ -113,17 +137,8 @@ impl Connection {
     pub fn open(&mut self, username: &str, password: &str, db_name: &str) -> Result<(), DbError> {
         self.connect_tcp()?;
 
-        match &self.kind {
-            DatabaseKind::Postgres => {
-                let mut backend = PostgresBackend::new(self);
-                backend.open(username, password, db_name)
-            }
-
-            DatabaseKind::MySql => {
-                let mut backend = MysqlBackend::new(self);
-                backend.open(username, password, db_name)
-            }
-        }
+        let mut backend = self.backend();
+        backend.open(username, password, db_name)
     }
 
     /// Returns `true` if the underlying TCP connection is open.
@@ -168,23 +183,13 @@ impl Connection {
             _ => {}
         }
 
-        let in_transaction =
-            matches!(self.state, ConnectionState::InTransaction);
+        let in_transaction = matches!(self.state, ConnectionState::InTransaction);
 
         self.state = ConnectionState::Busy;
 
-        let result = match &self.kind {
-            DatabaseKind::Postgres => {
-                let mut backend = PostgresBackend::new(self);
-
-                backend.exec(query)
-            }
-
-            DatabaseKind::MySql => {
-                let mut backend = MysqlBackend::new(self);
-
-                backend.exec(query)
-            }
+        let result = {
+            let mut backend = self.backend();
+            backend.exec(query)
         };
 
         self.state = if in_transaction {
@@ -399,10 +404,10 @@ impl Drop for PooledConnection {
             return;
         };
 
-        if matches!(conn.state, ConnectionState::InTransaction) {
-            if conn.rollback_transaction().is_err() {
-                return;
-            }
+        if matches!(conn.state, ConnectionState::InTransaction)
+            && conn.rollback_transaction().is_err()
+        {
+            return;
         }
 
         if let Ok(mut inner) = self.inner.0.lock() {
@@ -415,12 +420,15 @@ impl Drop for PooledConnection {
 /// A session that executes queries using connections from a pool.
 pub struct Session {
     pool: Arc<ConnectionPool>,
-    statements: Vec<Query>
+    statements: Vec<Query>,
 }
 
 impl Session {
     fn new(pool: Arc<ConnectionPool>) -> Self {
-        Self { pool, statements: Vec::new() }
+        Self {
+            pool,
+            statements: Vec::new(),
+        }
     }
 
     /// Executes a SQL query.
@@ -430,20 +438,26 @@ impl Session {
         connection.exec(query)
     }
 
-    pub fn stmt(&mut self, query: Query){
+    /// Adds a SQL query to the current unit of work.
+    pub fn add(&mut self, query: Query) {
         self.statements.push(query);
     }
 
-    pub fn commit(&self) -> Result<(), DbError>{
+    /// Commits all pending queries in a single database transaction.
+    pub fn commit(&mut self) -> Result<(), DbError> {
         if !self.statements.is_empty() {
             let mut connection = self.pool.get_wait()?;
 
             connection.start_transaction()?;
 
             for query in &self.statements {
-                connection.exec(&query)?;
+                connection.exec(query)?;
             }
+
+            connection.commit_transaction()?;
         }
+
+        self.statements.clear();
 
         Ok(())
     }
@@ -455,6 +469,7 @@ pub struct SessionMaker {
 }
 
 impl SessionMaker {
+    /// Creates a new session maker backed by a connection pool.
     pub fn new(config: DatabaseConfig) -> Result<Self, DbError> {
         let pool = ConnectionPool::new(config, 2, 5, true)?;
 
@@ -463,6 +478,7 @@ impl SessionMaker {
         })
     }
 
+    /// Creates a new database session.
     pub fn session(&self) -> Session {
         Session::new(self.pool.clone())
     }
