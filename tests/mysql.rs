@@ -71,7 +71,9 @@ fn mysql_simple_select() {
             assert_eq!(*value, 1);
         }
 
-        value => panic!("Expected Value::Int(1), got {:?}", value),
+        value => {
+            panic!("Expected Value::Int(1), got {:?}", value);
+        }
     }
 }
 
@@ -107,7 +109,9 @@ fn mysql_select_values() {
             assert_eq!(*value, 1);
         }
 
-        value => panic!("Expected Value::Int, got {:?}", value),
+        value => {
+            panic!("Expected Value::Int, got {:?}", value);
+        }
     }
 
     match &row.values()[1] {
@@ -115,7 +119,9 @@ fn mysql_select_values() {
             assert_eq!(value, "hello");
         }
 
-        value => panic!("Expected Value::String, got {:?}", value),
+        value => {
+            panic!("Expected Value::String, got {:?}", value);
+        }
     }
 
     match &row.values()[2] {
@@ -123,7 +129,9 @@ fn mysql_select_values() {
             assert_eq!(*value, 1);
         }
 
-        value => panic!("Expected Value::Int(1), got {:?}", value),
+        value => {
+            panic!("Expected Value::Int(1), got {:?}", value);
+        }
     }
 
     match &row.values()[3] {
@@ -131,13 +139,17 @@ fn mysql_select_values() {
             assert_eq!(*value, 3.14);
         }
 
-        value => panic!("Expected Value::Float, got {:?}", value),
+        value => {
+            panic!("Expected Value::Float, got {:?}", value);
+        }
     }
 
     match &row.values()[4] {
         Value::Null => {}
 
-        value => panic!("Expected Value::Null, got {:?}", value),
+        value => {
+            panic!("Expected Value::Null, got {:?}", value);
+        }
     }
 }
 
@@ -242,7 +254,9 @@ fn mysql_select_multiple_rows() {
                     assert_eq!(*value, 1);
                 }
 
-                value => panic!("Expected Value::Int(1), got {:?}", value),
+                value => {
+                    panic!("Expected Value::Int(1), got {:?}", value);
+                }
             }
 
             match &result.rows()[0].values()[1] {
@@ -250,7 +264,9 @@ fn mysql_select_multiple_rows() {
                     assert_eq!(value, "mario");
                 }
 
-                value => panic!("Expected Value::String(mario), got {:?}", value),
+                value => {
+                    panic!("Expected Value::String(mario), got {:?}", value);
+                }
             }
 
             match &result.rows()[0].values()[2] {
@@ -258,7 +274,9 @@ fn mysql_select_multiple_rows() {
                     assert_eq!(value, "rossi");
                 }
 
-                value => panic!("Expected Value::String(rossi), got {:?}", value),
+                value => {
+                    panic!("Expected Value::String(rossi), got {:?}", value);
+                }
             }
         },
     );
@@ -314,7 +332,9 @@ fn mysql_update() {
                     assert_eq!(value, "luigi");
                 }
 
-                value => panic!("Expected Value::String(luigi), got {:?}", value),
+                value => {
+                    panic!("Expected Value::String(luigi), got {:?}", value);
+                }
             }
         },
     );
@@ -365,7 +385,9 @@ fn mysql_delete() {
                     assert_eq!(*value, 2);
                 }
 
-                value => panic!("Expected Value::Int(2), got {:?}", value),
+                value => {
+                    panic!("Expected Value::Int(2), got {:?}", value);
+                }
             }
         },
     );
@@ -403,7 +425,6 @@ fn mysql_connection_pool() {
     let pool = ConnectionPool::new(config, 2, 5, true).unwrap();
 
     assert_eq!(pool.total_connections().unwrap(), 2);
-
     assert_eq!(pool.available_connections().unwrap(), 2);
 
     {
@@ -424,6 +445,7 @@ fn mysql_connection_pool_wait() {
     };
 
     let config = mysql_config();
+
     let pool = Arc::new(ConnectionPool::new(config, 1, 1, true).unwrap());
 
     let connection = pool.get().unwrap();
@@ -452,4 +474,171 @@ fn mysql_connection_pool_wait() {
     );
 
     handle.join().unwrap();
+}
+
+#[test]
+fn mysql_transaction_commit() {
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    with_test_table(
+        &mut connection,
+        "transactions",
+        String::from(
+            "
+            CREATE TABLE {table} (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(32)
+            );
+            ",
+        ),
+        |connection, table| {
+            connection.start_transaction().unwrap();
+
+            connection
+                .exec(&Query::new(&format!(
+                    "INSERT INTO {table} (id, name) VALUES (1, 'mario');"
+                )))
+                .unwrap();
+
+            connection.commit_transaction().unwrap();
+
+            let result = connection
+                .exec(&Query::new(&format!(
+                    "SELECT name FROM {table} WHERE id = 1;"
+                )))
+                .unwrap();
+
+            assert_eq!(result.rows().len(), 1);
+
+            match &result.rows()[0].values()[0] {
+                Value::String(value) => {
+                    assert_eq!(value, "mario");
+                }
+
+                value => {
+                    panic!("Expected Value::String(mario), got {:?}", value);
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn mysql_transaction_rollback() {
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    with_test_table(
+        &mut connection,
+        "transactions",
+        String::from(
+            "
+            CREATE TABLE {table} (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(32)
+            );
+            ",
+        ),
+        |connection, table| {
+            connection.start_transaction().unwrap();
+
+            connection
+                .exec(&Query::new(&format!(
+                    "INSERT INTO {table} (id, name) VALUES (1, 'mario');"
+                )))
+                .unwrap();
+
+            connection.rollback_transaction().unwrap();
+
+            let result = connection
+                .exec(&Query::new(&format!("SELECT * FROM {table};")))
+                .unwrap();
+
+            assert_eq!(result.rows().len(), 0);
+        },
+    );
+}
+
+#[test]
+fn mysql_transaction_state() {
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    assert!(
+        connection.commit_transaction().is_err(),
+        "commit should fail outside a transaction"
+    );
+
+    assert!(
+        connection.rollback_transaction().is_err(),
+        "rollback should fail outside a transaction"
+    );
+
+    connection.start_transaction().unwrap();
+
+    assert!(
+        connection.start_transaction().is_err(),
+        "starting a transaction twice should fail"
+    );
+
+    connection.rollback_transaction().unwrap();
+}
+
+#[test]
+fn mysql_pool_rolls_back_open_transaction() {
+    let config = mysql_config();
+
+    let pool = ConnectionPool::new(config, 1, 1, true).unwrap();
+
+    let table = unique_table_name("pool_transactions");
+
+    {
+        let mut connection = pool.get().unwrap();
+
+        connection
+            .exec(&Query::new(&format!(
+                "
+                CREATE TABLE {table} (
+                    id INTEGER PRIMARY KEY
+                );
+                "
+            )))
+            .unwrap();
+    }
+
+    {
+        let mut connection = pool.get().unwrap();
+
+        connection.start_transaction().unwrap();
+
+        connection
+            .exec(&Query::new(&format!(
+                "INSERT INTO {table} (id) VALUES (1);"
+            )))
+            .unwrap();
+
+        // Dropping PooledConnection must rollback the transaction.
+    }
+
+    {
+        let mut connection = pool.get().unwrap();
+
+        let result = connection
+            .exec(&Query::new(&format!("SELECT * FROM {table};")))
+            .unwrap();
+
+        assert_eq!(result.rows().len(), 0);
+    }
+
+    {
+        let mut connection = pool.get().unwrap();
+
+        connection
+            .exec(&Query::new(&format!("DROP TABLE {table};")))
+            .unwrap();
+    }
 }

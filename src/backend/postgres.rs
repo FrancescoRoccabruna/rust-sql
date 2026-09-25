@@ -235,4 +235,28 @@ impl<'a> Backend for PostgresBackend<'a> {
 
         Ok(result)
     }
+
+    fn start_transaction(&mut self) -> Result<(), DbError> {
+        let query = Query::new("BEGIN;");
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn commit_transaction(&mut self) -> Result<(), DbError> {
+        let query = Query::new("COMMIT;");
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn rollback_transaction(&mut self) -> Result<(), DbError> {
+        let query = Query::new("ROLLBACK;");
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
 }
