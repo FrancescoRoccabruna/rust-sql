@@ -1,7 +1,10 @@
+extern crate self as rust_sql;
+
 mod backend;
 mod config;
 mod connection;
 mod mysql_protocol;
+pub mod orm;
 mod postgres_protocol;
 mod query;
 mod table;
@@ -12,6 +15,8 @@ pub use connection::{
     Connection, ConnectionPool, DbError, PooledConnection, Session, SessionMaker,
 };
 
-pub use query::{Query, QueryResult};
+pub use query::{ExecutableQuery, Query, QueryResult};
 
-pub use table::{Column, Dataframe, DfError, Row, Value, ValueType};
+pub use table::{Dataframe, DfError, ResultColumn, ResultRow, Value, ValueType};
+
+pub use rust_sql_derive::Table;

@@ -2,15 +2,15 @@ use std::fmt;
 
 /// Describes a column returned by a query.
 #[derive(Debug)]
-pub struct Column {
-    /// Column name.
+pub struct ResultColumn {
+    /// ResultColumn name.
     pub name: String,
 
     /// Type of values stored in the column.
     pub value_type: ValueType,
 }
 
-impl fmt::Display for Column {
+impl fmt::Display for ResultColumn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)
     }
@@ -18,11 +18,11 @@ impl fmt::Display for Column {
 
 /// A row returned by a database query.
 #[derive(Debug)]
-pub struct Row {
+pub struct ResultRow {
     pub(crate) content: Vec<Value>,
 }
 
-impl Row {
+impl ResultRow {
     /// Returns the number of values in the row.
     pub fn size(&self) -> usize {
         self.content.len()
@@ -34,7 +34,7 @@ impl Row {
     }
 }
 
-impl fmt::Display for Row {
+impl fmt::Display for ResultRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, value) in self.content.iter().enumerate() {
             if i > 0 {
@@ -49,7 +49,7 @@ impl fmt::Display for Row {
 }
 
 /// A value returned by a database query.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// SQL NULL value.
     Null,
@@ -87,8 +87,122 @@ impl fmt::Display for Value {
     }
 }
 
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
+        Value::Int(value)
+    }
+}
+
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
+        Value::Int(value as i64)
+    }
+}
+
+impl From<i16> for Value {
+    fn from(value: i16) -> Self {
+        Value::Int(value as i64)
+    }
+}
+
+impl From<i8> for Value {
+    fn from(value: i8) -> Self {
+        Value::Int(value as i64)
+    }
+}
+
+impl From<u64> for Value {
+    fn from(value: u64) -> Self {
+        Value::UInt(value)
+    }
+}
+
+impl From<u32> for Value {
+    fn from(value: u32) -> Self {
+        Value::UInt(value as u64)
+    }
+}
+
+impl From<u16> for Value {
+    fn from(value: u16) -> Self {
+        Value::UInt(value as u64)
+    }
+}
+
+impl From<u8> for Value {
+    fn from(value: u8) -> Self {
+        Value::UInt(value as u64)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::Bool(value)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Value::Float(value)
+    }
+}
+
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Value::Float(value as f64)
+    }
+}
+
+impl From<usize> for Value {
+    fn from(value: usize) -> Self {
+        Value::UInt(value as u64)
+    }
+}
+
+impl From<isize> for Value {
+    fn from(value: isize) -> Self {
+        Value::Int(value as i64)
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Value::String(value)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Value::String(value.to_string())
+    }
+}
+
+impl From<Vec<u8>> for Value {
+    fn from(value: Vec<u8>) -> Self {
+        Value::Bytes(value)
+    }
+}
+
+impl From<&[u8]> for Value {
+    fn from(value: &[u8]) -> Self {
+        Value::Bytes(value.to_vec())
+    }
+}
+
+impl<T> From<Option<T>> for Value
+where
+    T: Into<Value>,
+{
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(value) => value.into(),
+            None => Value::Null,
+        }
+    }
+}
+
 /// Describes the type of a database value.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ValueType {
     /// Signed integer.
     Int,
@@ -125,8 +239,8 @@ impl fmt::Display for ValueType {
 /// Tabular representation of a query result.
 #[derive(Debug)]
 pub struct Dataframe {
-    columns: Vec<Column>,
-    rows: Vec<Row>,
+    columns: Vec<ResultColumn>,
+    rows: Vec<ResultRow>,
 }
 
 impl Dataframe {
@@ -134,7 +248,7 @@ impl Dataframe {
     ///
     /// Returns an error if a row contains a different number of values
     /// than the number of columns.
-    pub fn new(columns: Vec<Column>, rows: Vec<Row>) -> Result<Self, DfError> {
+    pub fn new(columns: Vec<ResultColumn>, rows: Vec<ResultRow>) -> Result<Self, DfError> {
         for row in &rows {
             if row.size() != columns.len() {
                 return Err(DfError::new(String::from("Mismatch rows size")));

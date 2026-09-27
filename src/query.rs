@@ -1,8 +1,12 @@
-use crate::table::{Column, Dataframe, DfError, Row};
+use crate::{
+    Connection, DbError, Value,
+    table::{Dataframe, DfError, ResultColumn, ResultRow},
+};
 
 /// A SQL query to be executed by a database connection.
 pub struct Query {
     sql: String,
+    params: Vec<Value>,
 }
 
 impl Query {
@@ -10,6 +14,15 @@ impl Query {
     pub fn new(sql: &str) -> Self {
         Self {
             sql: sql.to_string(),
+            params: Vec::new(),
+        }
+    }
+
+    /// Creates a parameterized SQL query.
+    pub fn with_params(sql: &str, params: Vec<Value>) -> Self {
+        Self {
+            sql: sql.to_string(),
+            params,
         }
     }
 
@@ -17,11 +30,16 @@ impl Query {
     pub fn sql(&self) -> &str {
         &self.sql
     }
+
+    /// Returns the query parameters.
+    pub(crate) fn params(&self) -> &[Value] {
+        &self.params
+    }
 }
 
 pub struct QueryResult {
-    columns: Vec<Column>,
-    rows: Vec<Row>,
+    columns: Vec<ResultColumn>,
+    rows: Vec<ResultRow>,
 }
 
 /// Result returned after executing a SQL query.
@@ -34,21 +52,21 @@ impl QueryResult {
         }
     }
 
-    pub(crate) fn set_columns(&mut self, columns: Vec<Column>) {
+    pub(crate) fn set_columns(&mut self, columns: Vec<ResultColumn>) {
         self.columns = columns;
     }
 
-    pub(crate) fn add_row(&mut self, row: Row) {
+    pub(crate) fn add_row(&mut self, row: ResultRow) {
         self.rows.push(row);
     }
 
     /// Returns the rows returned by the query.
-    pub fn rows(&self) -> &[Row] {
+    pub fn rows(&self) -> &[ResultRow] {
         &self.rows
     }
 
     /// Returns the columns returned by the query.
-    pub fn columns(&self) -> &[Column] {
+    pub fn columns(&self) -> &[ResultColumn] {
         &self.columns
     }
 
@@ -61,5 +79,19 @@ impl QueryResult {
 impl Default for QueryResult {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub trait ExecutableQuery {
+    type Output;
+
+    fn execute(&self, connection: &mut Connection) -> Result<Self::Output, DbError>;
+}
+
+impl ExecutableQuery for Query {
+    type Output = QueryResult;
+
+    fn execute(&self, connection: &mut Connection) -> Result<Self::Output, DbError> {
+        connection.execute_raw(self)
     }
 }

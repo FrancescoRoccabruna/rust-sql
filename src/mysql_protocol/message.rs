@@ -1,5 +1,6 @@
 pub const OK_PACKET: u8 = 0x00;
 pub const ERR_PACKET: u8 = 0xFF;
+const COM_STMT_PREPARE: u8 = 0x16;
 
 pub struct Message {
     pub(crate) sequence_id: u8,
@@ -12,6 +13,15 @@ impl Message {
             sequence_id,
             payload,
         }
+    }
+
+    pub fn statement_prepare(sql: &str) -> Vec<u8> {
+        let mut payload = Vec::new();
+
+        payload.push(COM_STMT_PREPARE);
+        payload.extend_from_slice(sql.as_bytes());
+
+        payload
     }
 
     pub fn message_type(&self) -> Option<u8> {

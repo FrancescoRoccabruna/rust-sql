@@ -7,10 +7,7 @@ use std::{
 };
 
 use crate::{
-    DatabaseConfig,
-    backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend},
-    config::DatabaseKind,
-    query::{Query, QueryResult},
+    DatabaseConfig, backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, orm::{TableDefinition, query::OrmQueryRequest}, query::{ExecutableQuery, Query, QueryResult},
 };
 
 #[expect(dead_code)]
@@ -175,7 +172,10 @@ impl Connection {
     }
 
     /// Executes a SQL query.
-    pub fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+    pub fn exec<Q>(&mut self, query: &Q) -> Result<Q::Output, DbError>
+    where
+        Q: ExecutableQuery,
+    {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
@@ -187,10 +187,7 @@ impl Connection {
 
         self.state = ConnectionState::Busy;
 
-        let result = {
-            let mut backend = self.backend();
-            backend.exec(query)
-        };
+        let result = { query.execute(self) };
 
         self.state = if in_transaction {
             ConnectionState::InTransaction
@@ -199,6 +196,25 @@ impl Connection {
         };
 
         result
+    }
+
+    pub(crate) fn execute_raw(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+        let mut backend = self.backend();
+        backend.exec(query)
+    }
+
+    pub(crate) fn execute_orm(
+        &mut self,
+        query: &dyn OrmQueryRequest,
+    ) -> Result<QueryResult, DbError> {
+        let mut backend = self.backend();
+        backend.exec_orm(query)
+    }
+
+    pub(crate) fn create_table(&mut self, table: &TableDefinition) -> Result<(), DbError> {
+        let mut backend = self.backend();
+
+        backend.create_table(table)
     }
 }
 
@@ -432,9 +448,11 @@ impl Session {
     }
 
     /// Executes a SQL query.
-    pub fn exec(&self, query: &Query) -> Result<QueryResult, DbError> {
+    pub fn exec<Q>(&self, query: &Q) -> Result<Q::Output, DbError>
+    where
+        Q: ExecutableQuery,
+    {
         let mut connection = self.pool.get_wait()?;
-
         connection.exec(query)
     }
 

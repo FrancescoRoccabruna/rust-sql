@@ -1,17 +1,17 @@
 use crate::{
     DbError,
-    table::{Column, Row, Value, ValueType},
+    table::{ResultColumn, ResultRow, Value, ValueType},
 };
 
-type RowDescription = (Vec<Column>, Vec<u32>, Vec<i16>);
+type ResultRowDescription = (Vec<ResultColumn>, Vec<u32>, Vec<i16>);
 
 pub struct ResultParser {}
 
 impl ResultParser {
-    pub fn parse_row_description(payload: &[u8]) -> Result<RowDescription, ParserError> {
+    pub fn parse_row_description(payload: &[u8]) -> Result<ResultRowDescription, ParserError> {
         if payload.len() < 2 {
             return Err(ParserError::new(String::from(
-                "Invalid RowDescription payload",
+                "Invalid ResultRowDescription payload",
             )));
         }
 
@@ -41,7 +41,7 @@ impl ResultParser {
 
             let value_type = Self::value_type_from_oid(type_oid)?;
 
-            let column = Column { name, value_type };
+            let column = ResultColumn { name, value_type };
 
             columns.push(column);
             type_oids.push(type_oid);
@@ -148,7 +148,7 @@ impl ResultParser {
 
         if length < 0 {
             return Err(ParserError::new(String::from(
-                "Invalid DataRow value length",
+                "Invalid DataResultRow value length",
             )));
         }
 
@@ -156,7 +156,7 @@ impl ResultParser {
 
         if *offset + length > payload.len() {
             return Err(ParserError::new(String::from(
-                "Unexpected end of DataRow payload",
+                "Unexpected end of DataResultRow payload",
             )));
         }
 
@@ -169,12 +169,14 @@ impl ResultParser {
 
     pub fn parse_data_row(
         payload: &[u8],
-        columns: &[Column],
+        columns: &[ResultColumn],
         type_oids: &[u32],
         format_codes: &[i16],
-    ) -> Result<Row, ParserError> {
+    ) -> Result<ResultRow, ParserError> {
         if payload.len() < 2 {
-            return Err(ParserError::new(String::from("Invalid DataRow payload")));
+            return Err(ParserError::new(String::from(
+                "Invalid DataResultRow payload",
+            )));
         }
 
         let mut offset = 0;
@@ -186,7 +188,9 @@ impl ResultParser {
         }
 
         if number_of_columns as usize != columns.len() {
-            return Err(ParserError::new(String::from("DataRow columns mismatch")));
+            return Err(ParserError::new(String::from(
+                "DataResultRow columns mismatch",
+            )));
         }
 
         if format_codes.len() != columns.len() {
@@ -212,7 +216,7 @@ impl ResultParser {
             values.push(value);
         }
 
-        Ok(Row { content: values })
+        Ok(ResultRow { content: values })
     }
 
     fn decode_value(

@@ -1,6 +1,6 @@
 use crate::{
     DbError,
-    table::{Column, Row, Value, ValueType},
+    table::{ResultColumn, ResultRow, Value, ValueType},
 };
 
 const MYSQL_TYPE_DECIMAL: u8 = 0;
@@ -24,6 +24,10 @@ const MYSQL_TYPE_NEWDECIMAL: u8 = 246;
 const MYSQL_TYPE_BLOB: u8 = 252;
 const MYSQL_TYPE_VAR_STRING: u8 = 253;
 const MYSQL_TYPE_STRING: u8 = 254;
+const MYSQL_TYPE_TINY_BLOB: u8 = 249;
+const MYSQL_TYPE_MEDIUM_BLOB: u8 = 250;
+const MYSQL_TYPE_LONG_BLOB: u8 = 251;
+const BINARY_CHARSET: u16 = 63;
 
 const UNSIGNED_FLAG: u16 = 0x0020;
 
@@ -39,10 +43,10 @@ impl ResultParser {
             count.ok_or_else(|| ParserError::new(String::from("Invalid NULL column count")))?;
 
         usize::try_from(count)
-            .map_err(|_| ParserError::new(String::from("Column count exceeds usize")))
+            .map_err(|_| ParserError::new(String::from("ResultColumn count exceeds usize")))
     }
 
-    pub fn parse_column_definition(payload: &[u8]) -> Result<(Column, u8, u16), ParserError> {
+    pub fn parse_column_definition(payload: &[u8]) -> Result<(ResultColumn, u8, u16), ParserError> {
         let mut offset = 0;
 
         // catalog
@@ -73,7 +77,7 @@ impl ResultParser {
         }
 
         // character set
-        let _character_set = Self::read_u16_le(payload, &mut offset)?;
+        let character_set = Self::read_u16_le(payload, &mut offset)?;
 
         // column length
         let _column_length = Self::read_u32_le(payload, &mut offset)?;
@@ -90,25 +94,30 @@ impl ResultParser {
         // filler
         Self::read_bytes(payload, &mut offset, 2)?;
 
-        let value_type = Self::value_type_from_mysql_type(column_type)?;
+        let value_type =
+            Self::value_type_from_mysql_type(column_type, character_set)?;
 
-        let column = Column { name, value_type };
+        let column = ResultColumn { name, value_type };
 
         Ok((column, column_type, flags))
     }
 
     pub fn parse_row(
         payload: &[u8],
-        columns: &[Column],
+        columns: &[ResultColumn],
         column_types: &[u8],
         flags: &[u16],
-    ) -> Result<Row, ParserError> {
+    ) -> Result<ResultRow, ParserError> {
         if column_types.len() != columns.len() {
-            return Err(ParserError::new(String::from("Column types mismatch")));
+            return Err(ParserError::new(String::from(
+                "ResultColumn types mismatch",
+            )));
         }
 
         if flags.len() != columns.len() {
-            return Err(ParserError::new(String::from("Column flags mismatch")));
+            return Err(ParserError::new(String::from(
+                "ResultColumn flags mismatch",
+            )));
         }
 
         let mut offset = 0;
@@ -128,7 +137,7 @@ impl ResultParser {
             values.push(value);
         }
 
-        Ok(Row { content: values })
+        Ok(ResultRow { content: values })
     }
 
     fn decode_value(
@@ -215,16 +224,29 @@ impl ResultParser {
         Ok(Value::String(value))
     }
 
-    fn value_type_from_mysql_type(column_type: u8) -> Result<ValueType, ParserError> {
+    fn value_type_from_mysql_type(
+        column_type: u8,
+        character_set: u16,
+    ) -> Result<ValueType, ParserError> {
         match column_type {
-            MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_INT24
-            | MYSQL_TYPE_LONGLONG => Ok(ValueType::Int),
+            MYSQL_TYPE_TINY
+            | MYSQL_TYPE_SHORT
+            | MYSQL_TYPE_LONG
+            | MYSQL_TYPE_INT24
+            | MYSQL_TYPE_LONGLONG => {
+                Ok(ValueType::Int)
+            }
 
-            MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE | MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => {
+            MYSQL_TYPE_FLOAT
+            | MYSQL_TYPE_DOUBLE
+            | MYSQL_TYPE_DECIMAL
+            | MYSQL_TYPE_NEWDECIMAL => {
                 Ok(ValueType::Float)
             }
 
-            MYSQL_TYPE_BIT => Ok(ValueType::Bool),
+            MYSQL_TYPE_BIT => {
+                Ok(ValueType::Bool)
+            }
 
             MYSQL_TYPE_VARCHAR
             | MYSQL_TYPE_VAR_STRING
@@ -234,11 +256,24 @@ impl ResultParser {
             | MYSQL_TYPE_DATETIME
             | MYSQL_TYPE_TIMESTAMP
             | MYSQL_TYPE_YEAR
-            | MYSQL_TYPE_JSON => Ok(ValueType::String),
+            | MYSQL_TYPE_JSON => {
+                Ok(ValueType::String)
+            }
 
-            MYSQL_TYPE_BLOB => Ok(ValueType::Bytes),
+            MYSQL_TYPE_TINY_BLOB
+            | MYSQL_TYPE_MEDIUM_BLOB
+            | MYSQL_TYPE_LONG_BLOB
+            | MYSQL_TYPE_BLOB => {
+                if character_set == BINARY_CHARSET {
+                    Ok(ValueType::Bytes)
+                } else {
+                    Ok(ValueType::String)
+                }
+            }
 
-            MYSQL_TYPE_NULL => Ok(ValueType::String),
+            MYSQL_TYPE_NULL => {
+                Ok(ValueType::String)
+            }
 
             _ => Err(ParserError::new(format!(
                 "Unsupported MySQL column type: {}",
@@ -378,6 +413,228 @@ impl ResultParser {
         *offset += length;
 
         Ok(value)
+    }
+
+    pub fn parse_binary_row(
+        payload: &[u8],
+        columns: &[ResultColumn],
+        column_types: &[u8],
+        flags: &[u16],
+    ) -> Result<ResultRow, ParserError> {
+        if column_types.len() != columns.len() {
+            return Err(ParserError::new(String::from("Column types mismatch")));
+        }
+
+        if flags.len() != columns.len() {
+            return Err(ParserError::new(String::from("Column flags mismatch")));
+        }
+
+        if payload.is_empty() {
+            return Err(ParserError::new(String::from("Empty MySQL binary row")));
+        }
+
+        // Binary row header.
+        if payload[0] != 0x00 {
+            return Err(ParserError::new(String::from(
+                "Invalid MySQL binary row header",
+            )));
+        }
+
+        let mut offset = 1;
+
+        // Binary protocol NULL-bitmap:
+        //
+        // length = (column_count + 7 + 2) / 8
+        //
+        // The first two bits are reserved.
+        let bitmap_length = (columns.len() + 7 + 2) / 8;
+
+        let null_bitmap = Self::read_bytes(payload, &mut offset, bitmap_length)?;
+
+        let mut values = Vec::with_capacity(columns.len());
+
+        for index in 0..columns.len() {
+            let bitmap_index = (index + 2) / 8;
+
+            let bitmap_bit = (index + 2) % 8;
+
+            let is_null = null_bitmap[bitmap_index] & (1 << bitmap_bit) != 0;
+
+            if is_null {
+                values.push(Value::Null);
+                continue;
+            }
+
+            let value = Self::decode_binary_value(
+                payload,
+                &mut offset,
+                &columns[index].value_type,
+                column_types[index],
+                flags[index],
+            )?;
+
+            values.push(value);
+        }
+
+        Ok(ResultRow { content: values })
+    }
+
+    fn decode_binary_value(
+        payload: &[u8],
+        offset: &mut usize,
+        value_type: &ValueType,
+        column_type: u8,
+        flags: u16,
+    ) -> Result<Value, ParserError> {
+        match column_type {
+            MYSQL_TYPE_TINY => {
+                let bytes = Self::read_bytes(payload, offset, 1)?;
+
+                if flags & UNSIGNED_FLAG != 0 {
+                    Ok(Value::UInt(bytes[0] as u64))
+                } else {
+                    Ok(Value::Int((bytes[0] as i8) as i64))
+                }
+            }
+
+            MYSQL_TYPE_SHORT => {
+                let bytes = Self::read_bytes(payload, offset, 2)?;
+
+                if flags & UNSIGNED_FLAG != 0 {
+                    let value = u16::from_le_bytes([bytes[0], bytes[1]]);
+
+                    Ok(Value::UInt(value as u64))
+                } else {
+                    let value = i16::from_le_bytes([bytes[0], bytes[1]]);
+
+                    Ok(Value::Int(value as i64))
+                }
+            }
+
+            MYSQL_TYPE_LONG => {
+                let bytes = Self::read_bytes(payload, offset, 4)?;
+
+                if flags & UNSIGNED_FLAG != 0 {
+                    let value = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+                    Ok(Value::UInt(value as u64))
+                } else {
+                    let value = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+                    Ok(Value::Int(value as i64))
+                }
+            }
+
+            MYSQL_TYPE_INT24 => {
+                let bytes = Self::read_bytes(payload, offset, 3)?;
+
+                let value =
+                    (bytes[0] as u32) | ((bytes[1] as u32) << 8) | ((bytes[2] as u32) << 16);
+
+                if flags & UNSIGNED_FLAG != 0 {
+                    Ok(Value::UInt(value as u64))
+                } else {
+                    let value = if value & 0x0080_0000 != 0 {
+                        value | 0xFF00_0000
+                    } else {
+                        value
+                    };
+
+                    Ok(Value::Int((value as i32) as i64))
+                }
+            }
+
+            MYSQL_TYPE_LONGLONG => {
+                let bytes = Self::read_bytes(payload, offset, 8)?;
+
+                if flags & UNSIGNED_FLAG != 0 {
+                    let value = u64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]);
+
+                    Ok(Value::UInt(value))
+                } else {
+                    let value = i64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]);
+
+                    Ok(Value::Int(value))
+                }
+            }
+
+            MYSQL_TYPE_FLOAT => {
+                let bytes = Self::read_bytes(payload, offset, 4)?;
+
+                let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+
+                Ok(Value::Float(value as f64))
+            }
+
+            MYSQL_TYPE_DOUBLE => {
+                let bytes = Self::read_bytes(payload, offset, 8)?;
+
+                let value = f64::from_le_bytes([
+                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                ]);
+
+                Ok(Value::Float(value))
+            }
+
+            MYSQL_TYPE_STRING | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_VARCHAR => {
+                Self::decode_binary_string(payload, offset)
+            }
+
+            MYSQL_TYPE_TINY_BLOB
+            | MYSQL_TYPE_MEDIUM_BLOB
+            | MYSQL_TYPE_LONG_BLOB
+            | MYSQL_TYPE_BLOB => {
+                match value_type {
+                    ValueType::String => {
+                        Self::decode_binary_string(payload, offset)
+                    }
+
+                    ValueType::Bytes => {
+                        let bytes =
+                            Self::read_lenenc_bytes(payload, offset)?;
+
+                        Ok(Value::Bytes(bytes.to_vec()))
+                    }
+
+                    _ => Err(ParserError::new(String::from(
+                        "Invalid MySQL BLOB value type",
+                    ))),
+                }
+            }
+
+            MYSQL_TYPE_BIT => {
+                let bytes = Self::read_lenenc_bytes(payload, offset)?;
+
+                if bytes.len() != 1 {
+                    return Err(ParserError::new(String::from(
+                        "Invalid MySQL binary BIT value",
+                    )));
+                }
+
+                Ok(Value::Bool(bytes[0] != 0))
+            }
+
+            _ => Err(ParserError::new(format!(
+                "Unsupported MySQL binary column type: {}",
+                column_type
+            ))),
+        }
+    }
+
+    fn decode_binary_string(payload: &[u8], offset: &mut usize) -> Result<Value, ParserError> {
+        let raw = Self::read_lenenc_bytes(payload, offset)?;
+
+        let value = std::str::from_utf8(raw)
+            .map_err(|_| ParserError::new(String::from("Invalid UTF-8 MySQL string")))?
+            .to_string();
+
+        Ok(Value::String(value))
     }
 }
 
