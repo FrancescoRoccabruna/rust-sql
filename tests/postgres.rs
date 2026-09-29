@@ -745,6 +745,7 @@ fn postgres_prepared_null() {
 
 #[derive(Table)]
 struct Test {
+    #[primary_key]
     id: i64,
     name: String,
     active: bool,
@@ -802,7 +803,7 @@ fn postgres_orm_select() {
             .order_by(Test::id.desc())
             .limit(2);
 
-        let result = connection.exec(&query).unwrap();
+        let result = connection.exec(&query).unwrap().all();
 
         assert_eq!(result.len(), 2);
 

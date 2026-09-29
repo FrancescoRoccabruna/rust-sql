@@ -1,5 +1,5 @@
 use crate::{
-    DbError, orm::{TableDefinition, query::OrmQueryRequest}, query::{Query, QueryResult},
+    DbError, orm::{TableDefinition, query::SelectQueryRequest}, query::{Query, QueryResult},
 };
 
 pub(crate) mod mysql;
@@ -20,7 +20,7 @@ pub(crate) trait Backend {
 
     fn exec_prepared(&mut self, query: &Query) -> Result<QueryResult, DbError>;
 
-    fn exec_orm(&mut self, query: &dyn OrmQueryRequest) -> Result<QueryResult, DbError>;
+    fn exec_orm(&mut self, query: &dyn SelectQueryRequest) -> Result<QueryResult, DbError>;
 
     fn start_transaction(&mut self) -> Result<(), DbError>;
 

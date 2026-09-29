@@ -24,6 +24,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
             let mut consts = Vec::new();
             let mut rows = Vec::new();
 
+            let mut primary_key_count = 0;
+
             for (index, field) in fields.named.iter().enumerate() {
                 let field_name = field.ident.as_ref().expect("named field");
 
@@ -53,6 +55,20 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     .any(|attr| attr.path().is_ident("primary_key"));
 
                 let nullable = field_type.nullable();
+
+
+                if primary_key && nullable {
+                    return syn::Error::new_spanned(
+                        &field.ty,
+                        "Primary key cannot be nullable",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+
+                if primary_key {
+                    primary_key_count +=1;
+                }
 
                 let nullability_type = field_type.nullability_type();
 
@@ -91,6 +107,25 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 rows.push(quote! {
                     #field_name: #row_value
                 });
+
+            }
+
+            if primary_key_count == 0 {
+                return syn::Error::new_spanned(
+                    &name,
+                    "Primary key not found",
+                )
+                .to_compile_error()
+                .into();
+            }
+
+            if primary_key_count > 1 {
+                return syn::Error::new_spanned(
+                    &name,
+                    "Multiple primary keys are not supported",
+                )
+                .to_compile_error()
+                .into();
             }
 
             (definitions, values, consts, rows)

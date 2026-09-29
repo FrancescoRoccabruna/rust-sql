@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    DatabaseConfig, backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, orm::{TableDefinition, query::OrmQueryRequest}, query::{ExecutableQuery, Query, QueryResult},
+    DatabaseConfig, backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, orm::{TableDefinition, query::SelectQueryRequest}, query::{ExecutableQuery, Query, QueryResult},
 };
 
 #[expect(dead_code)]
@@ -205,7 +205,7 @@ impl Connection {
 
     pub(crate) fn execute_orm(
         &mut self,
-        query: &dyn OrmQueryRequest,
+        query: &dyn SelectQueryRequest,
     ) -> Result<QueryResult, DbError> {
         let mut backend = self.backend();
         backend.exec_orm(query)

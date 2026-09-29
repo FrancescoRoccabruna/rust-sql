@@ -1,5 +1,5 @@
 use crate::{
-    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, OrderBy, OrmQueryRequest}, postgres_protocol::{
+    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, OrderBy, SelectQueryRequest}, postgres_protocol::{
         authentication::AuthKind,
         message::{Message, ServerMessage},
         result::ResultParser,
@@ -441,7 +441,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(result)
     }
 
-    fn exec_orm(&mut self, query: &dyn OrmQueryRequest) -> Result<QueryResult, DbError> {
+    fn exec_orm(&mut self, query: &dyn SelectQueryRequest) -> Result<QueryResult, DbError> {
         let fields = query.fields();
 
         let mut sql = format!(

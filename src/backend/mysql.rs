@@ -3,7 +3,7 @@ use crate::{
         authentication::Handshake,
         message::{ERR_PACKET, Message, OK_PACKET, ServerMessage},
         result::ResultParser,
-    }, orm::query::{Condition, OrderBy, OrmQueryRequest}, query::{Query, QueryResult},
+    }, orm::query::{Condition, OrderBy, SelectQueryRequest}, query::{Query, QueryResult},
 };
 
 use rsa::{Oaep, RsaPublicKey, pkcs8::DecodePublicKey};
@@ -678,7 +678,7 @@ impl<'a> Backend for MysqlBackend<'a> {
         Ok(result)
     }
 
-    fn exec_orm(&mut self, query: &dyn OrmQueryRequest) -> Result<QueryResult, DbError> {
+    fn exec_orm(&mut self, query: &dyn SelectQueryRequest) -> Result<QueryResult, DbError> {
         let fields = query.fields();
 
         let mut sql = format!(

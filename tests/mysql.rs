@@ -878,7 +878,7 @@ fn mysql_orm_select() {
             .order_by(Test::id.desc())
             .limit(2);
 
-        let result = connection.exec(&query).unwrap();
+        let result = connection.exec(&query).unwrap().all();
 
         assert_eq!(result.len(), 2);
 

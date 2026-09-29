@@ -5,7 +5,7 @@ use crate::{
 };
 use std::marker::PhantomData;
 
-/// Represents a query for an ORM table.
+/// Represents a select query for an ORM table.
 pub struct SelectQuery<T: Table> {
     _marker: PhantomData<T>,
     where_clause: Vec<Condition>,
@@ -43,7 +43,7 @@ impl<T: Table> SelectQuery<T> {
     }
 }
 
-pub(crate) trait OrmQueryRequest {
+pub(crate) trait SelectQueryRequest {
     fn table_name(&self) -> &'static str;
     fn fields(&self) -> Vec<ColumnRef>;
     fn where_clause(&self) -> &[Condition];
@@ -51,7 +51,7 @@ pub(crate) trait OrmQueryRequest {
     fn limit(&self) -> Option<usize>;
 }
 
-impl<T: Table> OrmQueryRequest for SelectQuery<T> {
+impl<T: Table> SelectQueryRequest for SelectQuery<T> {
     fn table_name(&self) -> &'static str {
         T::table_name()
     }
@@ -73,13 +73,44 @@ impl<T: Table> OrmQueryRequest for SelectQuery<T> {
     }
 }
 
-impl<T: Table> ExecutableQuery for SelectQuery<T> {
-    type Output = Vec<T>;
+pub struct SelectResult<T: Table> {
+    result: Vec<T>
+}
 
-    fn execute(&self, connection: &mut Connection) -> Result<Self::Output, DbError> {
+impl<T: Table> SelectResult<T> {
+    pub fn all(self) -> Vec<T> {
+        self.result
+    }
+
+    pub fn first(self) -> Option<T> {
+        self.result.into_iter().next()
+    }
+
+    pub fn len(&self) -> usize {
+        self.result.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.result.is_empty()
+    }
+}
+
+impl<T: Table> ExecutableQuery for SelectQuery<T> {
+    type Output = SelectResult<T>;
+
+    fn execute(
+        &self,
+        connection: &mut Connection,
+    ) -> Result<Self::Output, DbError> {
         let result = connection.execute_orm(self)?;
 
-        result.rows().iter().map(T::from_row).collect()
+        let result = result
+            .rows()
+            .iter()
+            .map(T::from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(SelectResult { result })
     }
 }
 
@@ -135,4 +166,16 @@ pub enum OrderBy {
 
     /// Sorts the column in descending order.
     Desc(ColumnRef),
+}
+
+/// Represents an insert query for an ORM table.
+pub struct InsertQuery<T: Table> {
+    _marker: PhantomData<T>
+}
+
+impl<T: Table> InsertQuery<T> {}
+
+/// Represents an update query for an ORM table.
+pub struct UpdateQuery<T: Table> {
+    _marker: PhantomData<T>,
 }
