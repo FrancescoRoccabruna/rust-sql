@@ -49,7 +49,7 @@ impl fmt::Display for ResultRow {
 }
 
 /// A value returned by a database query.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// SQL NULL value.
     Null,

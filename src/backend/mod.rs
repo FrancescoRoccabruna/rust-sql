@@ -1,5 +1,5 @@
 use crate::{
-    DbError, orm::{TableDefinition, query::SelectQueryRequest}, query::{Query, QueryResult},
+    DbError, orm::{TableDefinition, query::{InsertQueryRequest, SelectQueryRequest, UpdateQueryRequest}}, query::{Query, QueryResult},
 };
 
 pub(crate) mod mysql;
@@ -29,4 +29,15 @@ pub(crate) trait Backend {
     fn rollback_transaction(&mut self) -> Result<(), DbError>;
 
     fn create_table(&mut self, table: &TableDefinition) -> Result<(), DbError>;
+
+    fn exec_insert(
+        &mut self,
+        query: &dyn InsertQueryRequest,
+    ) -> Result<(), DbError>;
+
+
+    fn exec_update(
+        &mut self,
+        query: &dyn UpdateQueryRequest,
+    ) -> Result<(), DbError>;
 }

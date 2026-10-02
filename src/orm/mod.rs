@@ -11,6 +11,7 @@ pub use column::Nullable;
 pub use table::Table;
 
 pub use query::SelectQuery;
+pub(crate) use query::InsertQuery;
 pub use query::select;
 
 pub use schema::Schema;

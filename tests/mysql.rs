@@ -1,7 +1,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use rust_sql::orm::{Schema, select};
-use rust_sql::{Connection, ConnectionPool, DatabaseConfig, DatabaseKind, Query, Value};
+use rust_sql::{Connection, ConnectionPool, DatabaseConfig, DatabaseKind, Query, SessionMaker, Value};
 
 fn mysql_config() -> DatabaseConfig {
     DatabaseConfig::new(

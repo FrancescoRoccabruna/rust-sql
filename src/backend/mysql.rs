@@ -3,7 +3,7 @@ use crate::{
         authentication::Handshake,
         message::{ERR_PACKET, Message, OK_PACKET, ServerMessage},
         result::ResultParser,
-    }, orm::query::{Condition, OrderBy, SelectQueryRequest}, query::{Query, QueryResult},
+    }, orm::query::{Condition, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, query::{Query, QueryResult},
 };
 
 use rsa::{Oaep, RsaPublicKey, pkcs8::DecodePublicKey};
@@ -795,6 +795,78 @@ impl<'a> Backend for MysqlBackend<'a> {
             table.name,
             columns,
         ));
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_insert(
+        &mut self,
+        query: &dyn InsertQueryRequest,
+    ) -> Result<(), DbError> {
+        let values = query.values();
+
+        let columns = values
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders = std::iter::repeat("?")
+            .take(values.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let params = values
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect();
+
+        let query = Query::with_params(
+            &format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                query.table_name(),
+                columns,
+                placeholders,
+            ),
+            params,
+        );
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+
+    fn exec_update(
+        &mut self,
+        query: &dyn UpdateQueryRequest,
+    ) -> Result<(), DbError> {
+        let values = query.values();
+        let (primary_key_name, primary_key_value) = query.primary_key();
+
+        let columns = values
+            .iter()
+            .map(|(name, _)| format!("{} = ?", name))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let mut params = values
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
+
+        params.push(primary_key_value);
+
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} = ?",
+            query.table_name(),
+            columns,
+            primary_key_name,
+        );
+
+        let query = Query::with_params(&sql, params);
 
         self.exec(&query)?;
 

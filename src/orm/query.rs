@@ -1,9 +1,7 @@
 use crate::{
-    Connection, DbError, Value,
-    orm::{Table, column::ColumnRef},
-    query::ExecutableQuery,
+    Connection, DbError, Session, Value, orm::{Table, column::ColumnRef}, query::ExecutableQuery,
 };
-use std::marker::PhantomData;
+use std::{any::TypeId, cell::{Ref, RefCell, RefMut}, marker::PhantomData, rc::Rc};
 
 /// Represents a select query for an ORM table.
 pub struct SelectQuery<T: Table> {
@@ -73,8 +71,23 @@ impl<T: Table> SelectQueryRequest for SelectQuery<T> {
     }
 }
 
+pub(crate) trait InsertQueryRequest {
+    fn table_name(&self) -> &'static str;
+    fn values(&self) -> Vec<(&'static str, Value)>;
+}
+
+pub(crate) trait UpdateQueryRequest {
+    fn table_name(&self) -> &'static str;
+    fn primary_key(&self) -> (&'static str, Value);
+    fn values(&self) -> Vec<(&'static str, Value)>;
+}
+
 pub struct SelectResult<T: Table> {
-    result: Vec<T>
+    result: Vec<T>,
+}
+
+pub struct TrackedSelectResult<T: Table> {
+    result: Vec<Entity<T>>,
 }
 
 impl<T: Table> SelectResult<T> {
@@ -95,7 +108,28 @@ impl<T: Table> SelectResult<T> {
     }
 }
 
-impl<T: Table> ExecutableQuery for SelectQuery<T> {
+impl<T: Table> TrackedSelectResult<T> {
+    pub fn all(self) -> Vec<Entity<T>> {
+        self.result
+    }
+
+    pub fn first(self) -> Option<Entity<T>> {
+        self.result.into_iter().next()
+    }
+
+    pub fn len(&self) -> usize {
+        self.result.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.result.is_empty()
+    }
+}
+
+impl<T> ExecutableQuery for SelectQuery<T>
+where
+    T: Table,
+{
     type Output = SelectResult<T>;
 
     fn execute(
@@ -169,13 +203,130 @@ pub enum OrderBy {
 }
 
 /// Represents an insert query for an ORM table.
-pub struct InsertQuery<T: Table> {
-    _marker: PhantomData<T>
+pub(crate) struct InsertQuery<'a, T: Table> {
+    record: &'a T,
 }
 
-impl<T: Table> InsertQuery<T> {}
+impl<'a, T: Table> InsertQuery<'a, T> {
+    pub(crate) fn new(record: &'a T) -> Self {
+        Self { record }
+    }
+}
+
+impl<T: Table> InsertQueryRequest for InsertQuery<'_, T> {
+    fn table_name(&self) -> &'static str {
+        T::table_name()
+    }
+
+    fn values(&self) -> Vec<(&'static str, Value)> {
+        self.record.values()
+    }
+}
 
 /// Represents an update query for an ORM table.
-pub struct UpdateQuery<T: Table> {
-    _marker: PhantomData<T>,
+pub(crate) struct UpdateQuery<'a, T: Table> {
+    record: &'a T,
+}
+
+impl<'a, T: Table> UpdateQuery<'a, T> {
+    pub(crate) fn new(record: &'a T) -> Self {
+        Self { record }
+    }
+}
+
+impl<T: Table> UpdateQueryRequest for UpdateQuery<'_, T> {
+    fn table_name(&self) -> &'static str {
+        T::table_name()
+    }
+
+    fn values(&self) -> Vec<(&'static str, Value)> {
+        self.record.values()
+    }
+
+    fn primary_key(&self) -> (&'static str, Value) {
+        let fields = T::fields();
+        let values = self.record.values();
+
+        let pk = fields
+            .iter()
+            .find(|field| field.primary_key)
+            .expect("primary key required");
+
+        let (_, value) = values
+            .into_iter()
+            .find(|(name, _)| *name == pk.name)
+            .expect("primary key value required");
+
+        (pk.name, value)
+    }
+}
+
+pub trait SessionExecutableQuery {
+    type Output;
+
+    fn execute_in_session(
+        &self,
+        session: &mut Session,
+    ) -> Result<Self::Output, DbError>;
+}
+
+impl<T> SessionExecutableQuery for SelectQuery<T>
+where
+    T: Table + 'static,
+{
+    type Output = TrackedSelectResult<T>;
+
+    fn execute_in_session(
+        &self,
+        session: &mut Session,
+    ) -> Result<Self::Output, DbError> {
+        let result = session.execute_select(self)?;
+
+        let mut records = Vec::new();
+
+        for row in result.rows() {
+            let record = T::from_row(row)?;
+            let tracked = session.track_persistent(record)?;
+
+            records.push(Entity::from_inner(tracked));
+        }
+
+        Ok(TrackedSelectResult { result: records })
+    }
+}
+
+pub struct Entity<T: Table> {
+    inner: Rc<RefCell<T>>,
+}
+
+impl<T: Table> Entity<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(value)),
+        }
+    }
+
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub(crate) fn from_inner(inner: Rc<RefCell<T>>) -> Self {
+        Self { inner }
+    }
+
+    pub fn read(&self) -> Ref<'_, T> {
+        self.inner.borrow()
+    }
+
+    pub fn write(&self) -> RefMut<'_, T> {
+        self.inner.borrow_mut()
+    }
+}
+
+impl<T: Table> Clone for Entity<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Rc::clone(&self.inner),
+        }
+    }
 }

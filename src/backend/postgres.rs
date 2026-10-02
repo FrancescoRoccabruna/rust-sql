@@ -1,5 +1,5 @@
 use crate::{
-    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, OrderBy, SelectQueryRequest}, postgres_protocol::{
+    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, postgres_protocol::{
         authentication::AuthKind,
         message::{Message, ServerMessage},
         result::ResultParser,
@@ -560,6 +560,83 @@ impl<'a> Backend for PostgresBackend<'a> {
             table.name,
             columns,
         ));
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_insert(
+        &mut self,
+        query: &dyn InsertQueryRequest,
+    ) -> Result<(), DbError> {
+        let values = query.values();
+
+        let columns = values
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders = (1..=values.len())
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let params = values
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect();
+
+        let query = Query::with_params(
+            &format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                query.table_name(),
+                columns,
+                placeholders,
+            ),
+            params,
+        );
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_update(
+        &mut self,
+        query: &dyn UpdateQueryRequest,
+    ) -> Result<(), DbError> {
+        let values = query.values();
+        let (primary_key_name, primary_key_value) = query.primary_key();
+
+        let columns = values
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _))| {
+                format!("{} = ${}", name, index + 1)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let pk_index = values.len() + 1;
+
+        let mut params = values
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
+
+        params.push(primary_key_value);
+
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} = ${}",
+            query.table_name(),
+            columns,
+            primary_key_name,
+            pk_index,
+        );
+
+        let query = Query::with_params(&sql, params);
 
         self.exec(&query)?;
 
