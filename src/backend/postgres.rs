@@ -1,5 +1,5 @@
 use crate::{
-    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, postgres_protocol::{
+    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, DeleteQueryRequest, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, postgres_protocol::{
         authentication::AuthKind,
         message::{Message, ServerMessage},
         result::ResultParser,
@@ -637,6 +637,25 @@ impl<'a> Backend for PostgresBackend<'a> {
         );
 
         let query = Query::with_params(&sql, params);
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_delete(
+        &mut self,
+        query: &dyn DeleteQueryRequest,
+    ) -> Result<(), DbError> {
+        let (primary_key_name, primary_key_value) = query.primary_key();
+
+        let sql = format!(
+            "DELETE FROM {} WHERE {} = $1",
+            query.table_name(),
+            primary_key_name,
+        );
+
+        let query = Query::with_params(&sql, vec![primary_key_value]);
 
         self.exec(&query)?;
 

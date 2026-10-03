@@ -82,6 +82,11 @@ pub(crate) trait UpdateQueryRequest {
     fn values(&self) -> Vec<(&'static str, Value)>;
 }
 
+pub(crate) trait DeleteQueryRequest {
+    fn table_name(&self) -> &'static str;
+    fn primary_key(&self) -> (&'static str, Value);
+}
+
 pub struct SelectResult<T: Table> {
     result: Vec<T>,
 }
@@ -234,6 +239,17 @@ impl<'a, T: Table> UpdateQuery<'a, T> {
     }
 }
 
+/// Represents a delete query for an ORM table.
+pub(crate) struct DeleteQuery<'a, T: Table> {
+    record: &'a T,
+}
+
+impl<'a, T: Table> DeleteQuery<'a, T> {
+    pub(crate) fn new(record: &'a T) -> Self {
+        Self { record }
+    }
+}
+
 impl<T: Table> UpdateQueryRequest for UpdateQuery<'_, T> {
     fn table_name(&self) -> &'static str {
         T::table_name()
@@ -321,6 +337,10 @@ impl<T: Table> Entity<T> {
     pub fn write(&self) -> RefMut<'_, T> {
         self.inner.borrow_mut()
     }
+
+    pub(crate) fn inner(&self) -> &Rc<RefCell<T>> {
+        &self.inner
+    }
 }
 
 impl<T: Table> Clone for Entity<T> {
@@ -328,5 +348,28 @@ impl<T: Table> Clone for Entity<T> {
         Self {
             inner: Rc::clone(&self.inner),
         }
+    }
+}
+
+impl<T: Table> DeleteQueryRequest for DeleteQuery<'_, T> {
+    fn table_name(&self) -> &'static str {
+        T::table_name()
+    }
+
+    fn primary_key(&self) -> (&'static str, Value) {
+        let fields = T::fields();
+        let values = self.record.values();
+
+        let pk = fields
+            .iter()
+            .find(|field| field.primary_key)
+            .expect("primary key required");
+
+        let (_, value) = values
+            .into_iter()
+            .find(|(name, _)| *name == pk.name)
+            .expect("primary key value required");
+
+        (pk.name, value)
     }
 }

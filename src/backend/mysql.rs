@@ -3,7 +3,7 @@ use crate::{
         authentication::Handshake,
         message::{ERR_PACKET, Message, OK_PACKET, ServerMessage},
         result::ResultParser,
-    }, orm::query::{Condition, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, query::{Query, QueryResult},
+    }, orm::query::{Condition, DeleteQueryRequest, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, query::{Query, QueryResult},
 };
 
 use rsa::{Oaep, RsaPublicKey, pkcs8::DecodePublicKey};
@@ -867,6 +867,25 @@ impl<'a> Backend for MysqlBackend<'a> {
         );
 
         let query = Query::with_params(&sql, params);
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_delete(
+        &mut self,
+        query: &dyn DeleteQueryRequest,
+    ) -> Result<(), DbError> {
+        let (primary_key_name, primary_key_value) = query.primary_key();
+
+        let sql = format!(
+            "DELETE FROM {} WHERE {} = ?",
+            query.table_name(),
+            primary_key_name,
+        );
+
+        let query = Query::with_params(&sql, vec![primary_key_value]);
 
         self.exec(&query)?;
 

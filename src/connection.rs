@@ -1,9 +1,9 @@
 use std::{
-    any::{Any, TypeId}, cell::RefCell, collections::{HashMap, VecDeque}, hash::Hash, io::{Read, Write}, net::TcpStream, ops::{Deref, DerefMut}, rc::Rc, sync::{Arc, Condvar, Mutex},
+    any::{Any, TypeId}, cell::RefCell, collections::{HashMap, VecDeque, btree_map::Entry}, f64::consts::E, hash::Hash, io::{Read, Write}, net::TcpStream, ops::{Deref, DerefMut}, rc::Rc, sync::{Arc, Condvar, Mutex},
 };
 
 use crate::{
-    DatabaseConfig, Value, backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, orm::{InsertQuery, Table, TableDefinition, query::{self, Entity, InsertQueryRequest, SelectQueryRequest, SessionExecutableQuery, UpdateQuery, UpdateQueryRequest}}, query::{ExecutableQuery, Query, QueryResult},
+    DatabaseConfig, Value, backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend}, config::DatabaseKind, orm::{InsertQuery, Table, TableDefinition, query::{self, DeleteQuery, DeleteQueryRequest, Entity, InsertQueryRequest, SelectQueryRequest, SessionExecutableQuery, UpdateQuery, UpdateQueryRequest}}, query::{ExecutableQuery, Query, QueryResult},
 };
 
 #[expect(dead_code)]
@@ -227,6 +227,14 @@ impl Connection {
     ) -> Result<(), DbError> {
         let mut backend = self.backend();
         backend.exec_update(query)
+    }
+
+    pub(crate) fn execute_delete(
+        &mut self,
+        query: &dyn DeleteQueryRequest,
+    ) -> Result<(), DbError> {
+        let mut backend = self.backend();
+        backend.exec_delete(query)
     }
 }
 
@@ -478,6 +486,13 @@ impl Session {
         self.track_pending(record)
     }
 
+    pub fn delete<T>(&mut self, entity: Entity<T>) -> Result<(), DbError>
+    where 
+        T: Table + 'static,
+    {
+        self.delete_persistent(entity)
+    }
+
     /// Commits all pending queries in a single database transaction.
     pub fn commit(&mut self) -> Result<(), DbError> {
         if self.identity_map.is_empty() {
@@ -502,6 +517,10 @@ impl Session {
         for entry in self.identity_map.values_mut() {
             entry.commit_flush();
         }
+
+        self.identity_map.retain(|_, entry| {
+            !matches!(entry.state(), EntityState::Deleted)
+        });
 
         Ok(())
     }
@@ -587,6 +606,7 @@ impl Session {
             )));
         }
 
+        let original_values = record.values();
         let record = Rc::new(RefCell::new(record));
 
         self.identity_map.insert(
@@ -594,11 +614,62 @@ impl Session {
             Box::new(Tracked {
                 record: Rc::clone(&record),
                 state: EntityState::Pending,
-                original_values: Vec::new(),
+                original_values,
             }),
         );
 
         Ok(Entity::from_inner(record))
+    }
+
+    pub(crate) fn delete_persistent<T>(
+        &mut self,
+        entity: Entity<T>,
+    ) -> Result<(), DbError>
+    where
+        T: Table + 'static,
+    {
+        let key = self
+            .identity_map
+            .iter()
+            .find_map(|(key, entry)| {
+                let tracked = entry
+                    .as_any()
+                    .downcast_ref::<Tracked<T>>()?;
+
+                if Rc::ptr_eq(&tracked.record, entity.inner()) {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                DbError::new(String::from(
+                    "Entity is not tracked by this session",
+                ))
+            })?;
+
+        let state = self
+            .identity_map
+            .get(&key)
+            .unwrap()
+            .state();
+
+        match state {
+            EntityState::Pending => {
+                self.identity_map.remove(&key);
+            }
+
+            EntityState::Persistent => {
+                self.identity_map
+                    .get_mut(&key)
+                    .unwrap()
+                    .mark_deleted();
+            }
+
+            EntityState::Deleted => {}
+        }
+
+        Ok(())
     }
 }
 
@@ -623,7 +694,7 @@ impl SessionMaker {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct IdentityKey {
     type_id: TypeId,
     primary_key: IdentityValue,
@@ -642,6 +713,34 @@ impl IdentityKey {
             })?;
 
         let value = record
+            .values()
+            .into_iter()
+            .find(|(name, _)| *name == primary_key.name)
+            .map(|(_, value)| value)
+            .ok_or_else(|| {
+                DbError::new(String::from(
+                    "Primary key value not found",
+                ))
+            })?;
+
+        Ok(Self {
+            type_id: TypeId::of::<T>(),
+            primary_key: IdentityValue::try_from(&value)?,
+        })
+    }
+
+    fn from_entity<T>(entity: &Entity<T>) -> Result<Self, DbError>
+    where
+        T: Table + 'static,
+    {
+        let primary_key = T::fields()
+            .into_iter()
+            .find(|field| field.primary_key)
+            .ok_or_else(|| {
+                DbError::new(String::from("Primary key not found"))
+            })?;
+
+        let value = entity.read()
             .values()
             .into_iter()
             .find(|(name, _)| *name == primary_key.name)
@@ -700,6 +799,7 @@ enum EntityState {
 
 trait EntityEntry {
     fn state(&self) -> EntityState;
+    fn mark_deleted(&mut self);
     fn flush(&mut self, connection: &mut Connection) -> Result<(), DbError>;
 
     fn commit_flush(&mut self);
@@ -733,6 +833,10 @@ where
         self.state
     }
 
+    fn mark_deleted(&mut self) {
+        self.state = EntityState::Deleted;
+    }
+
     fn flush(
         &mut self,
         connection: &mut Connection,
@@ -740,6 +844,12 @@ where
         match self.state {
             EntityState::Pending => {
                 let record = self.record.borrow();
+                let current_values = record.values();
+
+                ensure_primary_key_unchanged::<T>(
+                    &self.original_values,
+                    &current_values,
+                )?;
 
                 let query = InsertQuery::new(&*record);
 
@@ -755,21 +865,10 @@ where
                     return Ok(());
                 }
 
-                let original_pk = primary_key_value::<T>(&self.original_values)
-                    .ok_or_else(|| DbError::new(
-                        String::from("Primary key not found in original values")
-                    ))?;
-
-                let current_pk = primary_key_value::<T>(&current_values)
-                    .ok_or_else(|| DbError::new(
-                        String::from("Primary key not found in current values")
-                    ))?;
-
-                if original_pk != current_pk {
-                    return Err(DbError::new(String::from(
-                        "Primary key of a persistent entity cannot be changed",
-                    )));
-                }
+                ensure_primary_key_unchanged::<T>(
+                    &self.original_values, 
+                    &current_values,
+                )?;
 
                 {
                     let record = self.record.borrow();
@@ -782,7 +881,19 @@ where
             },
 
             EntityState::Deleted => {
-                todo!()
+                let record = self.record.borrow();
+                let current_values = record.values();
+
+                ensure_primary_key_unchanged::<T>(
+                    &self.original_values,
+                    &current_values,
+                )?;
+
+                let query = DeleteQuery::new(&*record);
+
+                connection.execute_delete(&query)?;
+
+                Ok(())
             }
         }
     }
@@ -807,5 +918,35 @@ where
     }
 }
 
+
+fn ensure_primary_key_unchanged<T>(
+        original_values: &[(&'static str, Value)],
+        current_values: &[(&'static str, Value)],
+    ) -> Result<(), DbError>
+    where
+        T: Table,
+    {
+        let original_pk = primary_key_value::<T>(original_values)
+            .ok_or_else(|| {
+                DbError::new(String::from(
+                    "Primary key not found in original values",
+                ))
+            })?;
+
+        let current_pk = primary_key_value::<T>(current_values)
+            .ok_or_else(|| {
+                DbError::new(String::from(
+                    "Primary key not found in current values",
+                ))
+            })?;
+
+        if original_pk != current_pk {
+            return Err(DbError::new(String::from(
+                "Primary key of a tracked entity cannot be changed",
+            )));
+        }
+
+        Ok(())
+    }
 
 
