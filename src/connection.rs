@@ -1,16 +1,27 @@
 use std::{
-    collections::VecDeque,
+    any::{Any, TypeId},
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    hash::Hash,
     io::{Read, Write},
     net::TcpStream,
     ops::{Deref, DerefMut},
+    rc::Rc,
     sync::{Arc, Condvar, Mutex},
 };
 
 use crate::{
-    DatabaseConfig,
+    DatabaseConfig, Value,
     backend::{Backend, mysql::MysqlBackend, postgres::PostgresBackend},
     config::DatabaseKind,
-    query::{Query, QueryResult},
+    orm::{
+        InsertQuery, Table, TableDefinition,
+        query::{
+            DeleteQuery, DeleteQueryRequest, Entity, InsertQueryRequest, SelectQueryRequest,
+            SessionExecutableQuery, UpdateQuery, UpdateQueryRequest,
+        },
+    },
+    query::{ExecutableQuery, Query, QueryResult},
 };
 
 #[expect(dead_code)]
@@ -175,7 +186,10 @@ impl Connection {
     }
 
     /// Executes a SQL query.
-    pub fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+    pub fn exec<Q>(&mut self, query: &Q) -> Result<Q::Output, DbError>
+    where
+        Q: ExecutableQuery,
+    {
         match &self.state {
             ConnectionState::Busy => return Err(DbError::new(String::from("Connection is busy"))),
             ConnectionState::Error => return Err(DbError::new(String::from("Connection error"))),
@@ -187,10 +201,7 @@ impl Connection {
 
         self.state = ConnectionState::Busy;
 
-        let result = {
-            let mut backend = self.backend();
-            backend.exec(query)
-        };
+        let result = { query.execute(self) };
 
         self.state = if in_transaction {
             ConnectionState::InTransaction
@@ -199,6 +210,40 @@ impl Connection {
         };
 
         result
+    }
+
+    pub(crate) fn execute_raw(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+        let mut backend = self.backend();
+        backend.exec(query)
+    }
+
+    pub(crate) fn execute_orm(
+        &mut self,
+        query: &dyn SelectQueryRequest,
+    ) -> Result<QueryResult, DbError> {
+        let mut backend = self.backend();
+        backend.exec_orm(query)
+    }
+
+    pub(crate) fn create_table(&mut self, table: &TableDefinition) -> Result<(), DbError> {
+        let mut backend = self.backend();
+
+        backend.create_table(table)
+    }
+
+    pub(crate) fn execute_insert(&mut self, query: &dyn InsertQueryRequest) -> Result<(), DbError> {
+        let mut backend = self.backend();
+        backend.exec_insert(query)
+    }
+
+    pub(crate) fn execute_update(&mut self, query: &dyn UpdateQueryRequest) -> Result<(), DbError> {
+        let mut backend = self.backend();
+        backend.exec_update(query)
+    }
+
+    pub(crate) fn execute_delete(&mut self, query: &dyn DeleteQueryRequest) -> Result<(), DbError> {
+        let mut backend = self.backend();
+        backend.exec_delete(query)
     }
 }
 
@@ -420,44 +465,183 @@ impl Drop for PooledConnection {
 /// A session that executes queries using connections from a pool.
 pub struct Session {
     pool: Arc<ConnectionPool>,
-    statements: Vec<Query>,
+    identity_map: HashMap<IdentityKey, Box<dyn EntityEntry>>,
 }
 
 impl Session {
     fn new(pool: Arc<ConnectionPool>) -> Self {
         Self {
             pool,
-            statements: Vec::new(),
+            identity_map: HashMap::new(),
         }
     }
 
     /// Executes a SQL query.
-    pub fn exec(&self, query: &Query) -> Result<QueryResult, DbError> {
-        let mut connection = self.pool.get_wait()?;
-
-        connection.exec(query)
+    pub fn exec<Q>(&mut self, query: &Q) -> Result<Q::Output, DbError>
+    where
+        Q: SessionExecutableQuery,
+    {
+        query.execute_in_session(self)
     }
 
     /// Adds a SQL query to the current unit of work.
-    pub fn add(&mut self, query: Query) {
-        self.statements.push(query);
+    pub fn add<T>(&mut self, record: T) -> Result<Entity<T>, DbError>
+    where
+        T: Table + 'static,
+    {
+        self.track_pending(record)
+    }
+
+    pub fn delete<T>(&mut self, entity: Entity<T>) -> Result<(), DbError>
+    where
+        T: Table + 'static,
+    {
+        self.delete_persistent(entity)
     }
 
     /// Commits all pending queries in a single database transaction.
     pub fn commit(&mut self) -> Result<(), DbError> {
-        if !self.statements.is_empty() {
-            let mut connection = self.pool.get_wait()?;
-
-            connection.start_transaction()?;
-
-            for query in &self.statements {
-                connection.exec(query)?;
-            }
-
-            connection.commit_transaction()?;
+        if self.identity_map.is_empty() {
+            return Ok(());
         }
 
-        self.statements.clear();
+        let mut connection = self.pool.get_wait()?;
+        connection.start_transaction()?;
+
+        for entry in self.identity_map.values_mut() {
+            if let Err(error) = entry.flush(&mut connection) {
+                let _ = connection.rollback_transaction();
+                return Err(error);
+            }
+        }
+
+        if let Err(error) = connection.commit_transaction() {
+            let _ = connection.rollback_transaction();
+            return Err(error);
+        }
+
+        for entry in self.identity_map.values_mut() {
+            entry.commit_flush();
+        }
+
+        self.identity_map
+            .retain(|_, entry| !matches!(entry.state(), EntityState::Deleted));
+
+        Ok(())
+    }
+
+    pub(crate) fn execute_select(
+        &self,
+        query: &dyn SelectQueryRequest,
+    ) -> Result<QueryResult, DbError> {
+        let mut connection = self.pool.get_wait()?;
+        connection.execute_orm(query)
+    }
+
+    pub(crate) fn execute_query<Q>(&self, query: &Q) -> Result<Q::Output, DbError>
+    where
+        Q: ExecutableQuery,
+    {
+        let mut connection = self.pool.get_wait()?;
+        connection.exec(query)
+    }
+}
+
+impl Session {
+    fn get_tracked<T>(&self, key: &IdentityKey) -> Option<Rc<RefCell<T>>>
+    where
+        T: Table + 'static,
+    {
+        let entry = self.identity_map.get(key)?;
+
+        let tracked = entry.as_any().downcast_ref::<Tracked<T>>()?;
+
+        Some(Rc::clone(&tracked.record))
+    }
+
+    pub(crate) fn track_persistent<T>(&mut self, record: T) -> Result<Rc<RefCell<T>>, DbError>
+    where
+        T: Table + 'static,
+    {
+        let key = IdentityKey::from_record(&record)?;
+
+        if let Some(existing) = self.get_tracked::<T>(&key) {
+            return Ok(existing);
+        }
+
+        let original_values = record.values();
+        let record = Rc::new(RefCell::new(record));
+
+        self.identity_map.insert(
+            key,
+            Box::new(Tracked {
+                record: Rc::clone(&record),
+                state: EntityState::Persistent,
+                original_values,
+            }),
+        );
+
+        Ok(record)
+    }
+
+    pub(crate) fn track_pending<T>(&mut self, record: T) -> Result<Entity<T>, DbError>
+    where
+        T: Table + 'static,
+    {
+        let key = IdentityKey::from_record(&record)?;
+
+        if self.identity_map.contains_key(&key) {
+            return Err(DbError::new(String::from(
+                "Entity is already tracked by this session",
+            )));
+        }
+
+        let original_values = record.values();
+        let record = Rc::new(RefCell::new(record));
+
+        self.identity_map.insert(
+            key,
+            Box::new(Tracked {
+                record: Rc::clone(&record),
+                state: EntityState::Pending,
+                original_values,
+            }),
+        );
+
+        Ok(Entity::from_inner(record))
+    }
+
+    pub(crate) fn delete_persistent<T>(&mut self, entity: Entity<T>) -> Result<(), DbError>
+    where
+        T: Table + 'static,
+    {
+        let key = self
+            .identity_map
+            .iter()
+            .find_map(|(key, entry)| {
+                let tracked = entry.as_any().downcast_ref::<Tracked<T>>()?;
+
+                if Rc::ptr_eq(&tracked.record, entity.inner()) {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| DbError::new(String::from("Entity is not tracked by this session")))?;
+
+        let state = self.identity_map.get(&key).unwrap().state();
+
+        match state {
+            EntityState::Pending => {
+                self.identity_map.remove(&key);
+            }
+
+            EntityState::Persistent => {
+                self.identity_map.get_mut(&key).unwrap().mark_deleted();
+            }
+
+            EntityState::Deleted => {}
+        }
 
         Ok(())
     }
@@ -482,4 +666,196 @@ impl SessionMaker {
     pub fn session(&self) -> Session {
         Session::new(self.pool.clone())
     }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct IdentityKey {
+    type_id: TypeId,
+    primary_key: IdentityValue,
+}
+
+impl IdentityKey {
+    fn from_record<T>(record: &T) -> Result<Self, DbError>
+    where
+        T: Table + 'static,
+    {
+        let primary_key = T::fields()
+            .into_iter()
+            .find(|field| field.primary_key)
+            .ok_or_else(|| DbError::new(String::from("Primary key not found")))?;
+
+        let value = record
+            .values()
+            .into_iter()
+            .find(|(name, _)| *name == primary_key.name)
+            .map(|(_, value)| value)
+            .ok_or_else(|| DbError::new(String::from("Primary key value not found")))?;
+
+        Ok(Self {
+            type_id: TypeId::of::<T>(),
+            primary_key: IdentityValue::try_from(&value)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum IdentityValue {
+    Int(i64),
+    UInt(u64),
+    String(String),
+    Bytes(Vec<u8>),
+}
+
+impl TryFrom<&Value> for IdentityValue {
+    type Error = DbError;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Int(value) => Ok(Self::Int(*value)),
+            Value::UInt(value) => Ok(Self::UInt(*value)),
+            Value::String(value) => Ok(Self::String(value.clone())),
+            Value::Bytes(value) => Ok(Self::Bytes(value.clone())),
+
+            Value::Null => Err(DbError::new(String::from("Primary key cannot be null"))),
+
+            value => Err(DbError::new(format!(
+                "Unsupported primary key value: {:?}",
+                value,
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum EntityState {
+    Pending,
+    Persistent,
+    Deleted,
+}
+
+trait EntityEntry {
+    fn state(&self) -> EntityState;
+    fn mark_deleted(&mut self);
+    fn flush(&mut self, connection: &mut Connection) -> Result<(), DbError>;
+
+    fn commit_flush(&mut self);
+    fn as_any(&self) -> &dyn Any;
+}
+
+struct Tracked<T: Table> {
+    record: Rc<RefCell<T>>,
+    state: EntityState,
+    original_values: Vec<(&'static str, Value)>,
+}
+
+fn primary_key_value<'a, T: Table>(values: &'a [(&'static str, Value)]) -> Option<&'a Value> {
+    let pk = T::fields().into_iter().find(|field| field.primary_key)?;
+
+    values
+        .iter()
+        .find(|(name, _)| *name == pk.name)
+        .map(|(_, value)| value)
+}
+
+impl<T> EntityEntry for Tracked<T>
+where
+    T: Table + 'static,
+{
+    fn state(&self) -> EntityState {
+        self.state
+    }
+
+    fn mark_deleted(&mut self) {
+        self.state = EntityState::Deleted;
+    }
+
+    fn flush(&mut self, connection: &mut Connection) -> Result<(), DbError> {
+        match self.state {
+            EntityState::Pending => {
+                let record = self.record.borrow();
+                let current_values = record.values();
+
+                ensure_primary_key_unchanged::<T>(&self.original_values, &current_values)?;
+
+                let query = InsertQuery::new(&*record);
+
+                connection.execute_insert(&query)?;
+
+                Ok(())
+            }
+
+            EntityState::Persistent => {
+                let current_values = self.record.borrow().values();
+
+                if current_values == self.original_values {
+                    return Ok(());
+                }
+
+                ensure_primary_key_unchanged::<T>(&self.original_values, &current_values)?;
+
+                {
+                    let record = self.record.borrow();
+                    let query = UpdateQuery::new(&*record);
+
+                    connection.execute_update(&query)?;
+                }
+
+                Ok(())
+            }
+
+            EntityState::Deleted => {
+                let record = self.record.borrow();
+                let current_values = record.values();
+
+                ensure_primary_key_unchanged::<T>(&self.original_values, &current_values)?;
+
+                let query = DeleteQuery::new(&*record);
+
+                connection.execute_delete(&query)?;
+
+                Ok(())
+            }
+        }
+    }
+
+    fn commit_flush(&mut self) {
+        match self.state {
+            EntityState::Pending => {
+                self.original_values = self.record.borrow().values();
+                self.state = EntityState::Persistent;
+            }
+
+            EntityState::Persistent => {
+                self.original_values = self.record.borrow().values();
+            }
+
+            EntityState::Deleted => {}
+        }
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn ensure_primary_key_unchanged<T>(
+    original_values: &[(&'static str, Value)],
+    current_values: &[(&'static str, Value)],
+) -> Result<(), DbError>
+where
+    T: Table,
+{
+    let original_pk = primary_key_value::<T>(original_values)
+        .ok_or_else(|| DbError::new(String::from("Primary key not found in original values")))?;
+
+    let current_pk = primary_key_value::<T>(current_values)
+        .ok_or_else(|| DbError::new(String::from("Primary key not found in current values")))?;
+
+    if original_pk != current_pk {
+        return Err(DbError::new(String::from(
+            "Primary key of a tracked entity cannot be changed",
+        )));
+    }
+
+    Ok(())
 }

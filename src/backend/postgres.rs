@@ -1,6 +1,10 @@
 use crate::{
-    Connection, DbError,
+    Connection, DbError, Value, ValueType,
     backend::Backend,
+    orm::query::{
+        Condition, DeleteQueryRequest, InsertQueryRequest, OrderBy, SelectQueryRequest,
+        UpdateQueryRequest,
+    },
     postgres_protocol::{
         authentication::AuthKind,
         message::{Message, ServerMessage},
@@ -131,6 +135,114 @@ impl<'a> PostgresBackend<'a> {
 
         Ok(())
     }
+
+    fn encode_parameter(value: &Value) -> Option<Vec<u8>> {
+        match value {
+            Value::Null => None,
+
+            Value::Int(value) => Some(value.to_string().into_bytes()),
+
+            Value::UInt(value) => Some(value.to_string().into_bytes()),
+
+            Value::Float(value) => Some(value.to_string().into_bytes()),
+
+            Value::String(value) => Some(value.as_bytes().to_vec()),
+
+            Value::Bytes(value) => Some(value.clone()),
+
+            Value::Bool(value) => {
+                if *value {
+                    Some(b"true".to_vec())
+                } else {
+                    Some(b"false".to_vec())
+                }
+            }
+        }
+    }
+
+    fn build_condition(
+        index: &mut usize,
+        condition: &Condition,
+        params: &mut Vec<Value>,
+    ) -> String {
+        match condition {
+            Condition::Eq(column, value) => {
+                params.push(value.clone());
+
+                let placeholder = *index;
+                *index += 1;
+
+                format!("{} = ${}", column.name, placeholder)
+            }
+
+            Condition::NotEq(column, value) => {
+                params.push(value.clone());
+
+                let placeholder = *index;
+                *index += 1;
+
+                format!("{} != ${}", column.name, placeholder)
+            }
+
+            Condition::Gt(column, value) => {
+                params.push(value.clone());
+
+                let placeholder = *index;
+                *index += 1;
+
+                format!("{} > ${}", column.name, placeholder)
+            }
+
+            Condition::Gte(column, value) => {
+                params.push(value.clone());
+
+                let placeholder = *index;
+                *index += 1;
+
+                format!("{} >= ${}", column.name, placeholder)
+            }
+
+            Condition::Lt(column, value) => {
+                params.push(value.clone());
+
+                let placeholder = *index;
+                *index += 1;
+
+                format!("{} < ${}", column.name, placeholder)
+            }
+
+            Condition::Lte(column, value) => {
+                params.push(value.clone());
+
+                let placeholder = *index;
+                *index += 1;
+
+                format!("{} <= ${}", column.name, placeholder)
+            }
+
+            Condition::IsNull(column) => {
+                format!("{} IS NULL", column.name)
+            }
+
+            Condition::IsNotNull(column) => {
+                format!("{} IS NOT NULL", column.name)
+            }
+
+            Condition::And(left, right) => {
+                let left = Self::build_condition(index, left, params);
+                let right = Self::build_condition(index, right, params);
+
+                format!("({} AND {})", left, right)
+            }
+
+            Condition::Or(left, right) => {
+                let left = Self::build_condition(index, left, params);
+                let right = Self::build_condition(index, right, params);
+
+                format!("({} OR {})", left, right)
+            }
+        }
+    }
 }
 
 impl<'a> Backend for PostgresBackend<'a> {
@@ -179,7 +291,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-    fn exec(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+    fn exec_simple(&mut self, query: &Query) -> Result<QueryResult, DbError> {
         let message = Message::query(query.sql());
         self.connection.write(&message)?;
 
@@ -236,6 +348,163 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(result)
     }
 
+    fn exec_prepared(&mut self, query: &Query) -> Result<QueryResult, DbError> {
+        let params = query
+            .params()
+            .iter()
+            .map(Self::encode_parameter)
+            .collect::<Vec<_>>();
+
+        // Unnamed statement: viene sostituito ad ogni Parse.
+        let message = Message::parse_statement("", query.sql(), &[]);
+
+        self.connection.write(&message)?;
+
+        // Unnamed portal.
+        let message = Message::bind("", "", &params);
+
+        self.connection.write(&message)?;
+
+        // Chiediamo al server la descrizione
+        // del risultato del portal.
+        let message = Message::describe_portal("");
+
+        self.connection.write(&message)?;
+
+        // Eseguiamo il portal.
+        let message = Message::execute("");
+
+        self.connection.write(&message)?;
+
+        // Chiude il ciclo extended query.
+        let message = Message::sync();
+
+        self.connection.write(&message)?;
+
+        let mut result = QueryResult::new();
+
+        let mut error = None;
+
+        let mut columns = Vec::new();
+
+        let mut type_oids = Vec::new();
+
+        let mut format_codes = Vec::new();
+
+        loop {
+            let message = self.read_message()?;
+
+            match message.parse() {
+                ServerMessage::ErrorResponse(payload) => {
+                    error = Some(DbError::new(format!("error: {:?}", payload)));
+                }
+
+                ServerMessage::ReadyForQuery(_) => {
+                    break;
+                }
+
+                ServerMessage::RowDescription(payload) => {
+                    let (parsed_columns, parsed_type_oids, parsed_format_codes) =
+                        ResultParser::parse_row_description(&payload)?;
+
+                    columns = parsed_columns;
+
+                    type_oids = parsed_type_oids;
+
+                    format_codes = parsed_format_codes;
+                }
+
+                ServerMessage::DataRow(payload) => {
+                    let row = ResultParser::parse_data_row(
+                        &payload,
+                        &columns,
+                        &type_oids,
+                        &format_codes,
+                    )?;
+
+                    result.add_row(row);
+                }
+
+                ServerMessage::ParseComplete(_) => {}
+
+                ServerMessage::ParameterDescription(_) => {}
+
+                ServerMessage::BindComplete(_) => {}
+
+                ServerMessage::NoData(_) => {}
+
+                ServerMessage::CommandComplete(_) => {}
+
+                _ => {}
+            }
+        }
+
+        if let Some(error) = error {
+            return Err(error);
+        }
+
+        result.set_columns(columns);
+
+        Ok(result)
+    }
+
+    fn exec_orm(&mut self, query: &dyn SelectQueryRequest) -> Result<QueryResult, DbError> {
+        let fields = query.fields();
+
+        let mut sql = format!(
+            "SELECT {} FROM {}",
+            fields
+                .iter()
+                .map(|field| field.name)
+                .collect::<Vec<_>>()
+                .join(", "),
+            query.table_name(),
+        );
+
+        let mut params = Vec::new();
+
+        let mut index = 1;
+
+        if !query.where_clause().is_empty() {
+            let conditions = query
+                .where_clause()
+                .iter()
+                .map(|condition| Self::build_condition(&mut index, condition, &mut params))
+                .collect::<Vec<_>>();
+
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        if !query.order_by().is_empty() {
+            sql.push_str(" ORDER BY ");
+
+            let order_by = query
+                .order_by()
+                .iter()
+                .map(|order| match order {
+                    OrderBy::Asc(column) => {
+                        format!("{} ASC", column.name)
+                    }
+
+                    OrderBy::Desc(column) => {
+                        format!("{} DESC", column.name)
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            sql.push_str(&order_by.join(", "));
+        }
+
+        if let Some(limit) = query.limit() {
+            sql.push_str(&format!(" LIMIT {}", limit));
+        }
+
+        let query = Query::with_params(&sql, params);
+
+        self.exec(&query)
+    }
+
     fn start_transaction(&mut self) -> Result<(), DbError> {
         let query = Query::new("BEGIN;");
 
@@ -254,6 +523,127 @@ impl<'a> Backend for PostgresBackend<'a> {
 
     fn rollback_transaction(&mut self) -> Result<(), DbError> {
         let query = Query::new("ROLLBACK;");
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn create_table(&mut self, table: &crate::orm::TableDefinition) -> Result<(), DbError> {
+        let columns = table
+            .fields
+            .iter()
+            .map(|field| {
+                let sql_type = match field.value_type {
+                    ValueType::Int => "BIGINT",
+                    ValueType::UInt => "BIGINT",
+                    ValueType::Float => "DOUBLE PRECISION",
+                    ValueType::String => "TEXT",
+                    ValueType::Bytes => "BYTEA",
+                    ValueType::Bool => "BOOLEAN",
+                };
+
+                let mut definition = format!("{} {}", field.name, sql_type);
+
+                if field.primary_key {
+                    definition.push_str(" PRIMARY KEY");
+                }
+
+                if !field.nullable {
+                    definition.push_str(" NOT NULL");
+                }
+
+                definition
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query = Query::new(&format!(
+            "CREATE TABLE IF NOT EXISTS {} ({})",
+            table.name, columns,
+        ));
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_insert(&mut self, query: &dyn InsertQueryRequest) -> Result<(), DbError> {
+        let values = query.values();
+
+        let columns = values
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let placeholders = (1..=values.len())
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let params = values.into_iter().map(|(_, value)| value).collect();
+
+        let query = Query::with_params(
+            &format!(
+                "INSERT INTO {} ({}) VALUES ({})",
+                query.table_name(),
+                columns,
+                placeholders,
+            ),
+            params,
+        );
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_update(&mut self, query: &dyn UpdateQueryRequest) -> Result<(), DbError> {
+        let values = query.values();
+        let (primary_key_name, primary_key_value) = query.primary_key();
+
+        let columns = values
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _))| format!("{} = ${}", name, index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let pk_index = values.len() + 1;
+
+        let mut params = values
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
+
+        params.push(primary_key_value);
+
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} = ${}",
+            query.table_name(),
+            columns,
+            primary_key_name,
+            pk_index,
+        );
+
+        let query = Query::with_params(&sql, params);
+
+        self.exec(&query)?;
+
+        Ok(())
+    }
+
+    fn exec_delete(&mut self, query: &dyn DeleteQueryRequest) -> Result<(), DbError> {
+        let (primary_key_name, primary_key_value) = query.primary_key();
+
+        let sql = format!(
+            "DELETE FROM {} WHERE {} = $1",
+            query.table_name(),
+            primary_key_name,
+        );
+
+        let query = Query::with_params(&sql, vec![primary_key_value]);
 
         self.exec(&query)?;
 

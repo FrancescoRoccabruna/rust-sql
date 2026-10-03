@@ -1,4 +1,4 @@
-use sha1::Digest;
+use sha2::Digest;
 use sha2::Sha256;
 
 use crate::DbError;
