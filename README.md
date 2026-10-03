@@ -12,11 +12,19 @@ The project implements database communication directly through the native wire p
 * PostgreSQL authentication and SCRAM-SHA-256
 * MySQL authentication, including `caching_sha2_password`
 * SQL query execution
+* Prepared queries with parameters
 * Typed query results
 * Common result representation for PostgreSQL and MySQL
 * `Dataframe` conversion for tabular results
 * Connection pooling
 * Session-based query execution
+* Typed ORM queries
+* `Table` derive for mapping Rust structs to database tables
+* Schema creation from Rust table definitions
+* Session identity map
+* Unit of Work with tracked entity states
+* Automatic INSERT, UPDATE, and DELETE handling
+* Dirty tracking for persistent entities
 * No runtime dependency on the PostgreSQL or MySQL client libraries
 
 ## Supported databases
@@ -110,7 +118,7 @@ let config = DatabaseConfig::new(
 
 let sessions = SessionMaker::new(config)?;
 
-let session = sessions.session();
+let mut session = sessions.session();
 
 let result = session.exec(&Query::new(
     "SELECT id, name FROM users;",
@@ -118,6 +126,77 @@ let result = session.exec(&Query::new(
 ```
 
 Connections are returned to the pool automatically when a pooled connection is dropped.
+
+## ORM
+
+Rust structs can be mapped to database tables using the `Table` derive.
+
+```rust
+use rust_sql::Table;
+
+#[derive(Table)]
+struct User {
+    #[primary_key]
+    id: i64,
+    name: String,
+    active: bool,
+}
+```
+
+Tables can be created from their Rust definitions:
+
+```rust
+use rust_sql::orm::Schema;
+
+Schema::new(&config)?
+    .table::<User>()
+    .create_all()?;
+```
+
+Typed queries can be executed directly through a connection:
+
+```rust
+use rust_sql::orm::select;
+
+let users = connection
+    .exec(
+        &select::<User>()
+            .where_clause(User::active.eq(true))
+            .order_by(User::id.asc())
+            .limit(10),
+    )?
+    .all();
+```
+
+Sessions additionally track ORM entities through an identity map and Unit of Work.
+
+```rust
+let sessions = SessionMaker::new(config)?;
+let mut session = sessions.session();
+
+let user = session.add(User {
+    id: 1,
+    name: String::from("Mario"),
+    active: true,
+})?;
+
+session.commit()?;
+
+user.write().name = String::from("Luigi");
+
+session.commit()?;
+```
+
+Tracked entities can also be deleted through the session:
+
+```rust
+session.delete(user)?;
+session.commit()?;
+```
+
+A session tracks entity state and automatically determines whether an INSERT, UPDATE, or DELETE is required when `commit()` is called.
+
+Primary keys are immutable after an entity becomes tracked by a session.
 
 ## Architecture
 
@@ -131,6 +210,15 @@ Connection
     │
     └── MySQL backend
             └── MySQL wire protocol
+
+Session
+    │
+    ├── Connection pool
+    ├── Identity map
+    └── Unit of Work
+            ├── INSERT
+            ├── UPDATE
+            └── DELETE
 ```
 
 The main components are:
@@ -152,6 +240,7 @@ src/
 │   ├── result.rs
 │   ├── authentication.rs
 │   └── scram.rs
+├── orm/
 ├── config.rs
 ├── connection.rs
 ├── query.rs
@@ -159,13 +248,19 @@ src/
 └── lib.rs
 ```
 
-`Connection` provides the public connection API, while the backend implementations handle database-specific behavior. Protocol modules are responsible for encoding and decoding wire-protocol messages.
+`Connection` provides direct database access and raw or typed query execution.
+
+`Session` builds on top of the connection pool and provides stateful ORM behavior, including identity tracking and Unit of Work management.
+
+Backend implementations handle database-specific behavior, while protocol modules are responsible for encoding and decoding wire-protocol messages.
 
 ## Current status
 
 The project is currently in early development.
 
-The `0.1.0` release provides the initial PostgreSQL and MySQL client implementation, including authentication, query execution, result parsing, connection pooling, and integration tests.
+The `0.1.0` release introduced the initial PostgreSQL and MySQL client implementation, including authentication, query execution, result parsing, and the core database abstraction.
+
+The `0.2.0` release expands the library with connection pooling and the first ORM layer, including typed table mappings, schema creation, typed queries, sessions, identity tracking, Unit of Work behavior, dirty tracking, and automatic INSERT, UPDATE, and DELETE operations.
 
 The API should still be considered subject to change before the project reaches a more mature release.
 
