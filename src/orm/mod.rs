@@ -1,7 +1,7 @@
 mod column;
 pub(crate) mod query;
-mod table;
 mod schema;
+mod table;
 
 pub use column::Column;
 pub use column::ColumnRef;
@@ -10,8 +10,8 @@ pub use column::Nullable;
 
 pub use table::Table;
 
-pub use query::SelectQuery;
 pub(crate) use query::InsertQuery;
+pub use query::SelectQuery;
 pub use query::select;
 
 pub use schema::Schema;

@@ -1,5 +1,7 @@
 use crate::{
-    Connection, DbError, Session, Value, orm::query::SessionExecutableQuery, table::{Dataframe, DfError, ResultColumn, ResultRow},
+    Connection, DbError, Session, Value,
+    orm::query::SessionExecutableQuery,
+    table::{Dataframe, DfError, ResultColumn, ResultRow},
 };
 
 /// A SQL query to be executed by a database connection.
@@ -95,14 +97,10 @@ impl ExecutableQuery for Query {
     }
 }
 
-
 impl SessionExecutableQuery for Query {
     type Output = QueryResult;
 
-    fn execute_in_session(
-        &self,
-        session: &mut Session,
-    ) -> Result<Self::Output, DbError> {
+    fn execute_in_session(&self, session: &mut Session) -> Result<Self::Output, DbError> {
         session.execute_query(self)
     }
 }

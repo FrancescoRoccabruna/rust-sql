@@ -47,7 +47,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
                 let value = field_type.value(field_name);
 
-                let row_value = field_type.from_row_value(field_name, index);
+                let row_value = field_type.parse_row_value(field_name, index);
 
                 let primary_key = field
                     .attrs
@@ -56,18 +56,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
                 let nullable = field_type.nullable();
 
-
                 if primary_key && nullable {
-                    return syn::Error::new_spanned(
-                        &field.ty,
-                        "Primary key cannot be nullable",
-                    )
-                    .to_compile_error()
-                    .into();
+                    return syn::Error::new_spanned(&field.ty, "Primary key cannot be nullable")
+                        .to_compile_error()
+                        .into();
                 }
 
                 if primary_key {
-                    primary_key_count +=1;
+                    primary_key_count += 1;
                 }
 
                 let nullability_type = field_type.nullability_type();
@@ -107,25 +103,18 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 rows.push(quote! {
                     #field_name: #row_value
                 });
-
             }
 
             if primary_key_count == 0 {
-                return syn::Error::new_spanned(
-                    &name,
-                    "Primary key not found",
-                )
-                .to_compile_error()
-                .into();
+                return syn::Error::new_spanned(&name, "Primary key not found")
+                    .to_compile_error()
+                    .into();
             }
 
             if primary_key_count > 1 {
-                return syn::Error::new_spanned(
-                    &name,
-                    "Multiple primary keys are not supported",
-                )
-                .to_compile_error()
-                .into();
+                return syn::Error::new_spanned(&name, "Multiple primary keys are not supported")
+                    .to_compile_error()
+                    .into();
             }
 
             (definitions, values, consts, rows)
@@ -309,7 +298,7 @@ impl RustFieldType {
         }
     }
 
-    fn from_row_value(&self, field_name: &syn::Ident, index: usize) -> proc_macro2::TokenStream {
+    fn parse_row_value(&self, field_name: &syn::Ident, index: usize) -> proc_macro2::TokenStream {
         let field = field_name.to_string();
 
         match self {

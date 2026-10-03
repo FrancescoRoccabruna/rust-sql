@@ -94,8 +94,7 @@ impl ResultParser {
         // filler
         Self::read_bytes(payload, &mut offset, 2)?;
 
-        let value_type =
-            Self::value_type_from_mysql_type(column_type, character_set)?;
+        let value_type = Self::value_type_from_mysql_type(column_type, character_set)?;
 
         let column = ResultColumn { name, value_type };
 
@@ -229,24 +228,14 @@ impl ResultParser {
         character_set: u16,
     ) -> Result<ValueType, ParserError> {
         match column_type {
-            MYSQL_TYPE_TINY
-            | MYSQL_TYPE_SHORT
-            | MYSQL_TYPE_LONG
-            | MYSQL_TYPE_INT24
-            | MYSQL_TYPE_LONGLONG => {
-                Ok(ValueType::Int)
-            }
+            MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_INT24
+            | MYSQL_TYPE_LONGLONG => Ok(ValueType::Int),
 
-            MYSQL_TYPE_FLOAT
-            | MYSQL_TYPE_DOUBLE
-            | MYSQL_TYPE_DECIMAL
-            | MYSQL_TYPE_NEWDECIMAL => {
+            MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE | MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => {
                 Ok(ValueType::Float)
             }
 
-            MYSQL_TYPE_BIT => {
-                Ok(ValueType::Bool)
-            }
+            MYSQL_TYPE_BIT => Ok(ValueType::Bool),
 
             MYSQL_TYPE_VARCHAR
             | MYSQL_TYPE_VAR_STRING
@@ -256,9 +245,7 @@ impl ResultParser {
             | MYSQL_TYPE_DATETIME
             | MYSQL_TYPE_TIMESTAMP
             | MYSQL_TYPE_YEAR
-            | MYSQL_TYPE_JSON => {
-                Ok(ValueType::String)
-            }
+            | MYSQL_TYPE_JSON => Ok(ValueType::String),
 
             MYSQL_TYPE_TINY_BLOB
             | MYSQL_TYPE_MEDIUM_BLOB
@@ -271,9 +258,7 @@ impl ResultParser {
                 }
             }
 
-            MYSQL_TYPE_NULL => {
-                Ok(ValueType::String)
-            }
+            MYSQL_TYPE_NULL => Ok(ValueType::String),
 
             _ => Err(ParserError::new(format!(
                 "Unsupported MySQL column type: {}",
@@ -589,24 +574,19 @@ impl ResultParser {
             MYSQL_TYPE_TINY_BLOB
             | MYSQL_TYPE_MEDIUM_BLOB
             | MYSQL_TYPE_LONG_BLOB
-            | MYSQL_TYPE_BLOB => {
-                match value_type {
-                    ValueType::String => {
-                        Self::decode_binary_string(payload, offset)
-                    }
+            | MYSQL_TYPE_BLOB => match value_type {
+                ValueType::String => Self::decode_binary_string(payload, offset),
 
-                    ValueType::Bytes => {
-                        let bytes =
-                            Self::read_lenenc_bytes(payload, offset)?;
+                ValueType::Bytes => {
+                    let bytes = Self::read_lenenc_bytes(payload, offset)?;
 
-                        Ok(Value::Bytes(bytes.to_vec()))
-                    }
-
-                    _ => Err(ParserError::new(String::from(
-                        "Invalid MySQL BLOB value type",
-                    ))),
+                    Ok(Value::Bytes(bytes.to_vec()))
                 }
-            }
+
+                _ => Err(ParserError::new(String::from(
+                    "Invalid MySQL BLOB value type",
+                ))),
+            },
 
             MYSQL_TYPE_BIT => {
                 let bytes = Self::read_lenenc_bytes(payload, offset)?;

@@ -1,7 +1,4 @@
-use crate::{
-    DbError, ResultRow, Value,
-    orm::{column::ColumnRef},
-};
+use crate::{DbError, ResultRow, Value, orm::column::ColumnRef};
 
 pub trait Table: Sized {
     fn table_name() -> &'static str;

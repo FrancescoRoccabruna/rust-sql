@@ -1,7 +1,12 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::Mutex;
 
 use rust_sql::orm::{Schema, select};
-use rust_sql::{Connection, ConnectionPool, DatabaseConfig, DatabaseKind, Query, SessionMaker, Value};
+use rust_sql::{
+    Connection, ConnectionPool, DatabaseConfig, DatabaseKind, Query, SessionMaker, Value,
+};
+
+static ORM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn mysql_config() -> DatabaseConfig {
     DatabaseConfig::new(
@@ -829,6 +834,10 @@ fn mysql_prepared_select() {
 
 #[test]
 fn mysql_orm_select() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
     let config = mysql_config();
 
     let mut connection = config.connect().unwrap();
@@ -870,11 +879,7 @@ fn mysql_orm_select() {
 
         let query = select::<Test>()
             .where_clause(Test::id.gt(1))
-            .where_clause(
-                Test::score
-                    .gte(20)
-                    .or(Test::name.eq("mario")),
-            )
+            .where_clause(Test::score.gte(20).or(Test::name.eq("mario")))
             .order_by(Test::id.desc())
             .limit(2);
 
@@ -898,6 +903,260 @@ fn mysql_orm_select() {
         assert_eq!(second.score, 20.0);
         assert_eq!(second.data, vec![0x04, 0x05, 0x06]);
         assert_eq!(second.test.as_deref(), Some("a"));
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[test]
+fn mysql_orm_session_delete_persistent() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<Test>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let maker = SessionMaker::new(config).unwrap();
+        let mut session = maker.session();
+
+        let entity = session
+            .add(Test {
+                id: 1,
+                name: String::from("mario"),
+                active: true,
+                score: 10.0,
+                data: vec![1, 2, 3],
+                test: None,
+            })
+            .unwrap();
+
+        session.commit().unwrap();
+
+        session.delete(entity).unwrap();
+        session.commit().unwrap();
+
+        let result = connection
+            .exec(&Query::new(&format!(
+                "SELECT * FROM {} WHERE id = 1;",
+                Test::TABLE_NAME
+            )))
+            .unwrap();
+
+        assert_eq!(result.rows().len(), 0);
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[test]
+fn mysql_orm_session_delete_pending() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<Test>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let maker = SessionMaker::new(config).unwrap();
+        let mut session = maker.session();
+
+        let entity = session
+            .add(Test {
+                id: 1,
+                name: String::from("mario"),
+                active: true,
+                score: 10.0,
+                data: Vec::new(),
+                test: None,
+            })
+            .unwrap();
+
+        session.delete(entity).unwrap();
+        session.commit().unwrap();
+
+        let result = connection
+            .exec(&Query::new(&format!("SELECT * FROM {};", Test::TABLE_NAME)))
+            .unwrap();
+
+        assert_eq!(result.rows().len(), 0);
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[test]
+fn mysql_orm_session_rejects_delete_from_another_session() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<Test>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let maker = SessionMaker::new(config).unwrap();
+
+        let mut session_a = maker.session();
+        let mut session_b = maker.session();
+
+        let entity = session_a
+            .add(Test {
+                id: 1,
+                name: String::from("mario"),
+                active: true,
+                score: 10.0,
+                data: Vec::new(),
+                test: None,
+            })
+            .unwrap();
+
+        session_a.commit().unwrap();
+
+        // Fa caricare la stessa riga anche nella identity map di B.
+        session_b
+            .exec(&select::<Test>().where_clause(Test::id.eq(1)))
+            .unwrap()
+            .first()
+            .unwrap();
+
+        let result = session_b.delete(entity);
+
+        assert!(result.is_err());
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[test]
+fn mysql_orm_session_rejects_primary_key_change() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = mysql_config();
+
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<Test>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let maker = SessionMaker::new(config).unwrap();
+        let mut session = maker.session();
+
+        let entity = session
+            .add(Test {
+                id: 1,
+                name: String::from("mario"),
+                active: true,
+                score: 10.0,
+                data: Vec::new(),
+                test: None,
+            })
+            .unwrap();
+
+        entity.write().id = 2;
+
+        let result = session.commit();
+
+        assert!(result.is_err());
+
+        let result = connection
+            .exec(&Query::new(&format!("SELECT * FROM {};", Test::TABLE_NAME)))
+            .unwrap();
+
+        assert_eq!(result.rows().len(), 0);
     }));
 
     connection

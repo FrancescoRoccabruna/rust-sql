@@ -1,7 +1,13 @@
 use crate::{
-    Connection, DbError, Session, Value, orm::{Table, column::ColumnRef}, query::ExecutableQuery,
+    Connection, DbError, Session, Value,
+    orm::{Table, column::ColumnRef},
+    query::ExecutableQuery,
 };
-use std::{any::TypeId, cell::{Ref, RefCell, RefMut}, marker::PhantomData, rc::Rc};
+use std::{
+    cell::{Ref, RefCell, RefMut},
+    marker::PhantomData,
+    rc::Rc,
+};
 
 /// Represents a select query for an ORM table.
 pub struct SelectQuery<T: Table> {
@@ -137,10 +143,7 @@ where
 {
     type Output = SelectResult<T>;
 
-    fn execute(
-        &self,
-        connection: &mut Connection,
-    ) -> Result<Self::Output, DbError> {
+    fn execute(&self, connection: &mut Connection) -> Result<Self::Output, DbError> {
         let result = connection.execute_orm(self)?;
 
         let result = result
@@ -280,10 +283,7 @@ impl<T: Table> UpdateQueryRequest for UpdateQuery<'_, T> {
 pub trait SessionExecutableQuery {
     type Output;
 
-    fn execute_in_session(
-        &self,
-        session: &mut Session,
-    ) -> Result<Self::Output, DbError>;
+    fn execute_in_session(&self, session: &mut Session) -> Result<Self::Output, DbError>;
 }
 
 impl<T> SessionExecutableQuery for SelectQuery<T>
@@ -292,10 +292,7 @@ where
 {
     type Output = TrackedSelectResult<T>;
 
-    fn execute_in_session(
-        &self,
-        session: &mut Session,
-    ) -> Result<Self::Output, DbError> {
+    fn execute_in_session(&self, session: &mut Session) -> Result<Self::Output, DbError> {
         let result = session.execute_select(self)?;
 
         let mut records = Vec::new();
@@ -316,12 +313,6 @@ pub struct Entity<T: Table> {
 }
 
 impl<T: Table> Entity<T> {
-    pub(crate) fn new(value: T) -> Self {
-        Self {
-            inner: Rc::new(RefCell::new(value)),
-        }
-    }
-
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
     }

@@ -1,5 +1,10 @@
 use crate::{
-    DbError, orm::{TableDefinition, query::{DeleteQueryRequest, InsertQueryRequest, SelectQueryRequest, UpdateQueryRequest}}, query::{Query, QueryResult},
+    DbError,
+    orm::{
+        TableDefinition,
+        query::{DeleteQueryRequest, InsertQueryRequest, SelectQueryRequest, UpdateQueryRequest},
+    },
+    query::{Query, QueryResult},
 };
 
 pub(crate) mod mysql;
@@ -30,19 +35,9 @@ pub(crate) trait Backend {
 
     fn create_table(&mut self, table: &TableDefinition) -> Result<(), DbError>;
 
-    fn exec_insert(
-        &mut self,
-        query: &dyn InsertQueryRequest,
-    ) -> Result<(), DbError>;
+    fn exec_insert(&mut self, query: &dyn InsertQueryRequest) -> Result<(), DbError>;
 
+    fn exec_update(&mut self, query: &dyn UpdateQueryRequest) -> Result<(), DbError>;
 
-    fn exec_update(
-        &mut self,
-        query: &dyn UpdateQueryRequest,
-    ) -> Result<(), DbError>;
-
-    fn exec_delete(
-        &mut self,
-        query: &dyn DeleteQueryRequest,
-    ) -> Result<(), DbError>;
+    fn exec_delete(&mut self, query: &dyn DeleteQueryRequest) -> Result<(), DbError>;
 }

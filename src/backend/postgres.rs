@@ -1,10 +1,17 @@
 use crate::{
-    Connection, DbError, Value, ValueType, backend::Backend, orm::query::{Condition, DeleteQueryRequest, InsertQueryRequest, OrderBy, SelectQueryRequest, UpdateQueryRequest}, postgres_protocol::{
+    Connection, DbError, Value, ValueType,
+    backend::Backend,
+    orm::query::{
+        Condition, DeleteQueryRequest, InsertQueryRequest, OrderBy, SelectQueryRequest,
+        UpdateQueryRequest,
+    },
+    postgres_protocol::{
         authentication::AuthKind,
         message::{Message, ServerMessage},
         result::ResultParser,
         scram::ScramClient,
-    }, query::{Query, QueryResult},
+    },
+    query::{Query, QueryResult},
 };
 
 pub struct PostgresBackend<'a> {
@@ -522,10 +529,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-    fn create_table(
-        &mut self,
-        table: &crate::orm::TableDefinition,
-    ) -> Result<(), DbError> {
+    fn create_table(&mut self, table: &crate::orm::TableDefinition) -> Result<(), DbError> {
         let columns = table
             .fields
             .iter()
@@ -539,8 +543,7 @@ impl<'a> Backend for PostgresBackend<'a> {
                     ValueType::Bool => "BOOLEAN",
                 };
 
-                let mut definition =
-                    format!("{} {}", field.name, sql_type);
+                let mut definition = format!("{} {}", field.name, sql_type);
 
                 if field.primary_key {
                     definition.push_str(" PRIMARY KEY");
@@ -557,8 +560,7 @@ impl<'a> Backend for PostgresBackend<'a> {
 
         let query = Query::new(&format!(
             "CREATE TABLE IF NOT EXISTS {} ({})",
-            table.name,
-            columns,
+            table.name, columns,
         ));
 
         self.exec(&query)?;
@@ -566,10 +568,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-    fn exec_insert(
-        &mut self,
-        query: &dyn InsertQueryRequest,
-    ) -> Result<(), DbError> {
+    fn exec_insert(&mut self, query: &dyn InsertQueryRequest) -> Result<(), DbError> {
         let values = query.values();
 
         let columns = values
@@ -583,10 +582,7 @@ impl<'a> Backend for PostgresBackend<'a> {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let params = values
-            .into_iter()
-            .map(|(_, value)| value)
-            .collect();
+        let params = values.into_iter().map(|(_, value)| value).collect();
 
         let query = Query::with_params(
             &format!(
@@ -603,19 +599,14 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-    fn exec_update(
-        &mut self,
-        query: &dyn UpdateQueryRequest,
-    ) -> Result<(), DbError> {
+    fn exec_update(&mut self, query: &dyn UpdateQueryRequest) -> Result<(), DbError> {
         let values = query.values();
         let (primary_key_name, primary_key_value) = query.primary_key();
 
         let columns = values
             .iter()
             .enumerate()
-            .map(|(index, (name, _))| {
-                format!("{} = ${}", name, index + 1)
-            })
+            .map(|(index, (name, _))| format!("{} = ${}", name, index + 1))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -643,10 +634,7 @@ impl<'a> Backend for PostgresBackend<'a> {
         Ok(())
     }
 
-    fn exec_delete(
-        &mut self,
-        query: &dyn DeleteQueryRequest,
-    ) -> Result<(), DbError> {
+    fn exec_delete(&mut self, query: &dyn DeleteQueryRequest) -> Result<(), DbError> {
         let (primary_key_name, primary_key_value) = query.primary_key();
 
         let sql = format!(

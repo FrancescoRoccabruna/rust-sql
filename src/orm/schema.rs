@@ -1,10 +1,11 @@
-use crate::{Connection, DatabaseConfig, DbError, orm::{ColumnRef, Table}};
-
-
+use crate::{
+    Connection, DatabaseConfig, DbError,
+    orm::{ColumnRef, Table},
+};
 
 pub struct Schema {
     connection: Connection,
-    tables: Vec<TableDefinition>
+    tables: Vec<TableDefinition>,
 }
 
 impl Schema {
@@ -32,7 +33,6 @@ impl Schema {
         Ok(())
     }
 }
-
 
 pub(crate) struct TableDefinition {
     pub name: &'static str,
