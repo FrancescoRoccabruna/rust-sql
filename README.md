@@ -21,6 +21,8 @@ The project implements database communication directly through the native wire p
 * Typed ORM queries
 * `Table` derive for mapping Rust structs to database tables
 * Schema creation from Rust table definitions
+* Foreign key constraints
+* ORM relationships with forward and back-reference navigation
 * Session identity map
 * Unit of Work with tracked entity states
 * Automatic INSERT, UPDATE, and DELETE handling
@@ -129,7 +131,7 @@ Connections are returned to the pool automatically when a pooled connection is d
 
 ## ORM
 
-Rust structs can be mapped to database tables using the `Table` derive.
+Rust structs can be mapped to database tables using the `Table` derive, including primary keys, foreign keys, and ORM relationships.
 
 ```rust
 use rust_sql::Table;
@@ -151,6 +153,54 @@ use rust_sql::orm::Schema;
 Schema::new(&config)?
     .table::<User>()
     .create_all()?;
+```
+
+Foreign keys can be declared directly on table fields, with optional ORM relationship metadata:
+
+```rust
+#[derive(Table)]
+struct User {
+    #[primary_key]
+    id: i64,
+    name: String,
+}
+
+#[derive(Table)]
+struct Post {
+    #[primary_key]
+    id: i64,
+
+    #[foreign_key(
+        User::id,
+        relationship = user,
+        backref = posts
+    )]
+    user_id: i64,
+
+    title: String,
+}
+```
+
+The foreign key is used both for schema generation and, when relationship metadata is provided, for ORM navigation.
+
+Relationships are loaded through a session:
+
+```rust
+use rust_sql::orm::select;
+
+let post = session
+    .exec(
+        &select::<Post>()
+            .where_clause(Post::id.eq(1))
+    )?
+    .first()
+    .unwrap();
+
+let user = post
+    .user(&mut session)?
+    .unwrap();
+
+let posts = user.posts(&mut session)?;
 ```
 
 Typed queries can be executed directly through a connection:
@@ -215,6 +265,7 @@ Session
     │
     ├── Connection pool
     ├── Identity map
+    ├── Relationships
     └── Unit of Work
             ├── INSERT
             ├── UPDATE
@@ -250,7 +301,7 @@ src/
 
 `Connection` provides direct database access and raw or typed query execution.
 
-`Session` builds on top of the connection pool and provides stateful ORM behavior, including identity tracking and Unit of Work management.
+`Session` builds on top of the connection pool and provides stateful ORM behavior, including identity tracking, relationship loading, and Unit of Work management.
 
 Backend implementations handle database-specific behavior, while protocol modules are responsible for encoding and decoding wire-protocol messages.
 
@@ -261,6 +312,8 @@ The project is currently in early development.
 The `0.1.0` release introduced the initial PostgreSQL and MySQL client implementation, including authentication, query execution, result parsing, and the core database abstraction.
 
 The `0.2.0` release expands the library with connection pooling and the first ORM layer, including typed table mappings, schema creation, typed queries, sessions, identity tracking, Unit of Work behavior, dirty tracking, and automatic INSERT, UPDATE, and DELETE operations.
+
+The `0.3.0` release adds foreign key support and ORM relationships. Foreign keys can be declared directly through `Table` metadata and are included in generated schemas for both PostgreSQL and MySQL. Relationships can be defined on top of foreign keys with forward navigation, back-references, nullable relationships, and integration with the session identity map.
 
 The API should still be considered subject to change before the project reaches a more mature release.
 
