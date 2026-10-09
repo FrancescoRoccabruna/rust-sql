@@ -765,7 +765,7 @@ impl<'a> Backend for MysqlBackend<'a> {
     }
 
     fn create_table(&mut self, table: &crate::orm::TableDefinition) -> Result<(), DbError> {
-        let columns = table
+        let mut definitions = table
             .fields
             .iter()
             .map(|field| {
@@ -790,12 +790,21 @@ impl<'a> Backend for MysqlBackend<'a> {
 
                 definition
             })
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>();
+
+        definitions.extend(table.foreign_keys.iter().map(|foreign_key| {
+            format!(
+                "FOREIGN KEY ({}) REFERENCES {} ({})",
+                foreign_key.columns.join(", "),
+                foreign_key.referenced_table,
+                foreign_key.referenced_columns.join(", "),
+            )
+        }));
 
         let query = Query::new(&format!(
             "CREATE TABLE IF NOT EXISTS {} ({})",
-            table.name, columns,
+            table.name,
+            definitions.join(", "),
         ));
 
         self.exec(&query)?;

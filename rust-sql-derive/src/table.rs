@@ -17,12 +17,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     };
 
-    let (field_definitions, value_definitions, const_definitions, row_definitions) = match fields {
+    let (
+        field_definitions,
+        value_definitions,
+        const_definitions,
+        row_definitions,
+        foreign_key_definitions,
+        relationship_definitions,
+    ) = match fields {
         Fields::Named(fields) => {
             let mut definitions = Vec::new();
             let mut values = Vec::new();
             let mut consts = Vec::new();
             let mut rows = Vec::new();
+            let mut foreign_keys = Vec::new();
+            let mut relationships = Vec::new();
 
             let mut primary_key_count = 0;
 
@@ -55,6 +64,79 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     .any(|attr| attr.path().is_ident("primary_key"));
 
                 let nullable = field_type.nullable();
+
+                for attr in field
+                    .attrs
+                    .iter()
+                    .filter(|attr| attr.path().is_ident("foreign_key"))
+                {
+                    let args = match attr.parse_args::<ForeignKeyArgs>() {
+                        Ok(args) => args,
+                        Err(error) => {
+                            return error.to_compile_error().into();
+                        }
+                    };
+
+                    let ForeignKeyArgs {
+                        path,
+                        relationship,
+                        backref,
+                    } = args;
+
+                    if relationship.is_none() && backref.is_some() {
+                        return syn::Error::new_spanned(attr, "backref requires relationship")
+                            .to_compile_error()
+                            .into();
+                    }
+
+                    if path.segments.len() < 2 {
+                        return syn::Error::new_spanned(
+                            attr,
+                            "foreign_key must reference a column, e.g. #[foreign_key(User::id)]",
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+
+                    let referenced_column_ident = path
+                        .segments
+                        .last()
+                        .expect("foreign key column")
+                        .ident
+                        .clone();
+
+                    let referenced_column = referenced_column_ident.to_string();
+
+                    let mut referenced_table = path.clone();
+
+                    referenced_table.segments.pop();
+                    referenced_table.segments.pop_punct();
+
+                    foreign_keys.push(quote! {
+                        {
+                            // Forces the referenced typed column to actually exist.
+                            let _ = #path;
+
+                            ::rust_sql::orm::ForeignKeyRef {
+                                columns: vec![#column_name],
+                                referenced_table:
+                                    <#referenced_table as ::rust_sql::orm::Table>::table_name(),
+                                referenced_columns: vec![#referenced_column],
+                            }
+                        }
+                    });
+
+                    if let Some(relationship) = relationship {
+                        relationships.push(RelationshipDefinition {
+                            local_field: field_name.clone(),
+                            referenced_table,
+                            referenced_column: referenced_column_ident,
+                            relationship,
+                            backref,
+                            nullable,
+                        });
+                    }
+                }
 
                 if primary_key && nullable {
                     return syn::Error::new_spanned(&field.ty, "Primary key cannot be nullable")
@@ -117,7 +199,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     .into();
             }
 
-            (definitions, values, consts, rows)
+            (
+                definitions,
+                values,
+                consts,
+                rows,
+                foreign_keys,
+                relationships,
+            )
         }
 
         Fields::Unnamed(_) => {
@@ -134,6 +223,136 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
 
     let table_name = name.to_string().to_lowercase();
+
+    let relationship_trait_name = quote::format_ident!("{}Relationships", name);
+
+    let relationship_methods = relationship_definitions.iter().map(|relationship| {
+        let method = &relationship.relationship;
+        let referenced_table = &relationship.referenced_table;
+
+        quote! {
+            fn #method(
+                &self,
+                session: &mut ::rust_sql::Session,
+            ) -> Result<
+                Option<::rust_sql::Entity<#referenced_table>>,
+                ::rust_sql::DbError,
+            >;
+        }
+    });
+
+    let relationship_impls = relationship_definitions.iter().map(|relationship| {
+        let method = &relationship.relationship;
+        let local_field = &relationship.local_field;
+        let referenced_table = &relationship.referenced_table;
+        let referenced_column = &relationship.referenced_column;
+
+        if relationship.nullable {
+            quote! {
+                fn #method(
+                    &self,
+                    session: &mut ::rust_sql::Session,
+                ) -> Result<
+                    Option<::rust_sql::Entity<#referenced_table>>,
+                    ::rust_sql::DbError,
+                > {
+                    let value = {
+                        let entity = self.read();
+
+                        match &entity.#local_field {
+                            Some(value) => value.clone(),
+                            None => return Ok(None),
+                        }
+                    };
+
+                    Ok(
+                        session
+                            .exec(
+                                &::rust_sql::orm::select::<#referenced_table>()
+                                    .where_clause(
+                                        #referenced_table::#referenced_column.eq(value)
+                                    )
+                            )?
+                            .first()
+                    )
+                }
+            }
+        } else {
+            quote! {
+                fn #method(
+                    &self,
+                    session: &mut ::rust_sql::Session,
+                ) -> Result<
+                    Option<::rust_sql::Entity<#referenced_table>>,
+                    ::rust_sql::DbError,
+                > {
+                    let value = {
+                        let entity = self.read();
+                        entity.#local_field.clone()
+                    };
+
+                    Ok(
+                        session
+                            .exec(
+                                &::rust_sql::orm::select::<#referenced_table>()
+                                    .where_clause(
+                                        #referenced_table::#referenced_column.eq(value)
+                                    )
+                            )?
+                            .first()
+                    )
+                }
+            }
+        }
+    });
+
+    let backref_traits = relationship_definitions.iter().filter_map(|relationship| {
+        let method = relationship.backref.as_ref()?;
+        let referenced_table = &relationship.referenced_table;
+        let local_field = &relationship.local_field;
+        let referenced_column = &relationship.referenced_column;
+
+        let trait_name =
+            quote::format_ident!("{}{}BackrefRelationships", name, relationship.relationship);
+
+        Some(quote! {
+            pub trait #trait_name {
+                fn #method(
+                    &self,
+                    session: &mut ::rust_sql::Session,
+                ) -> Result<
+                    Vec<::rust_sql::Entity<#name>>,
+                    ::rust_sql::DbError,
+                >;
+            }
+
+            impl #trait_name for ::rust_sql::Entity<#referenced_table> {
+                fn #method(
+                    &self,
+                    session: &mut ::rust_sql::Session,
+                ) -> Result<
+                    Vec<::rust_sql::Entity<#name>>,
+                    ::rust_sql::DbError,
+                > {
+                    let value = {
+                        let entity = self.read();
+                        entity.#referenced_column.clone()
+                    };
+
+                    Ok(
+                        session
+                            .exec(
+                                &::rust_sql::orm::select::<#name>()
+                                    .where_clause(
+                                        #name::#local_field.eq(value)
+                                    )
+                            )?
+                            .all()
+                    )
+                }
+            }
+        })
+    });
 
     let expanded = quote! {
         impl #name {
@@ -158,6 +377,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
             )> {
                 vec![
                     #(#value_definitions),*
+                ]
+            }
+
+            fn foreign_keys() -> Vec<::rust_sql::orm::ForeignKeyRef> {
+                vec![
+                    #(#foreign_key_definitions),*
                 ]
             }
         }
@@ -189,7 +414,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     #(#row_definitions),*
                 })
             }
+
+            fn foreign_keys() -> Vec<::rust_sql::orm::ForeignKeyRef> {
+                Self::foreign_keys()
+            }
         }
+
+        trait #relationship_trait_name {
+            #(#relationship_methods)*
+        }
+
+        impl #relationship_trait_name for ::rust_sql::Entity<#name> {
+            #(#relationship_impls)*
+        }
+
+        #(#backref_traits)*
     };
 
     TokenStream::from(expanded)
@@ -890,4 +1129,55 @@ impl RustFieldType {
             },
         }
     }
+}
+
+use syn::{
+    Ident, Path, Token,
+    parse::{Parse, ParseStream},
+};
+
+struct ForeignKeyArgs {
+    path: Path,
+    relationship: Option<Ident>,
+    backref: Option<Ident>,
+}
+
+impl Parse for ForeignKeyArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let path: Path = input.parse()?;
+
+        let mut relationship = None;
+        let mut backref = None;
+
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let value: Ident = input.parse()?;
+
+            if key == "relationship" {
+                relationship = Some(value);
+            } else if key == "backref" {
+                backref = Some(value);
+            } else {
+                return Err(syn::Error::new(key.span(), "unknown foreign_key option"));
+            }
+        }
+
+        Ok(Self {
+            path,
+            relationship,
+            backref,
+        })
+    }
+}
+
+struct RelationshipDefinition {
+    local_field: Ident,
+    referenced_table: Path,
+    referenced_column: Ident,
+    relationship: Ident,
+    backref: Option<Ident>,
+    nullable: bool,
 }
