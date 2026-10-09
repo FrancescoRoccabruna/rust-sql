@@ -93,45 +93,60 @@ pub(crate) trait DeleteQueryRequest {
     fn primary_key(&self) -> (&'static str, Value);
 }
 
+/// Result of executing an ORM `SELECT` query directly through a [`Connection`].
+///
+/// The returned records are plain values and are not tracked by a [`Session`].
 pub struct SelectResult<T: Table> {
     result: Vec<T>,
 }
 
+
+/// Result of executing an ORM `SELECT` query through a [`Session`].
+///
+/// Each returned [`Entity`] is tracked by the session identity map.
 pub struct TrackedSelectResult<T: Table> {
     result: Vec<Entity<T>>,
 }
 
 impl<T: Table> SelectResult<T> {
+    /// Returns all records produced by the query.
     pub fn all(self) -> Vec<T> {
         self.result
     }
 
+    /// Returns the first record, if any.
     pub fn first(self) -> Option<T> {
         self.result.into_iter().next()
     }
 
+    /// Returns the number of records in the result.
     pub fn len(&self) -> usize {
         self.result.len()
     }
 
+    /// Returns `true` if the result contains no records.
     pub fn is_empty(&self) -> bool {
         self.result.is_empty()
     }
 }
 
 impl<T: Table> TrackedSelectResult<T> {
+    /// Returns all records produced by the query.
     pub fn all(self) -> Vec<Entity<T>> {
         self.result
     }
 
+    /// Returns the first record, if any.
     pub fn first(self) -> Option<Entity<T>> {
         self.result.into_iter().next()
     }
 
+    /// Returns the number of records in the result.
     pub fn len(&self) -> usize {
         self.result.len()
     }
 
+    /// Returns `true` if the result contains no records.
     pub fn is_empty(&self) -> bool {
         self.result.is_empty()
     }
@@ -280,9 +295,15 @@ impl<T: Table> UpdateQueryRequest for UpdateQuery<'_, T> {
     }
 }
 
+/// A query that can be executed through a [`Session`].
+///
+/// Session-aware queries may use session-specific behavior such as
+/// entity tracking and the identity map.
 pub trait SessionExecutableQuery {
+    /// Result produced by executing the query.
     type Output;
 
+    /// Executes the query using the provided session.
     fn execute_in_session(&self, session: &mut Session) -> Result<Self::Output, DbError>;
 }
 
@@ -308,11 +329,19 @@ where
     }
 }
 
+/// A session-tracked ORM entity.
+///
+/// Cloning an `Entity` creates another handle to the same underlying
+/// record rather than cloning the record itself.
+///
+/// Access to the record is provided through [`Entity::read`] and
+/// [`Entity::write`].
 pub struct Entity<T: Table> {
     inner: Rc<RefCell<T>>,
 }
 
 impl<T: Table> Entity<T> {
+    /// Returns `true` if both handles refer to the same tracked entity.
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
@@ -321,10 +350,23 @@ impl<T: Table> Entity<T> {
         Self { inner }
     }
 
+    /// Borrows the entity for reading.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is currently mutably borrowed.
     pub fn read(&self) -> Ref<'_, T> {
         self.inner.borrow()
     }
 
+    /// Borrows the entity for mutation.
+    ///
+    /// Changes made through this guard can be detected by the session
+    /// during the next commit.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the entity is already borrowed.
     pub fn write(&self) -> RefMut<'_, T> {
         self.inner.borrow_mut()
     }
