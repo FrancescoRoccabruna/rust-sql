@@ -150,6 +150,11 @@ impl ColumnRef {
         }
     }
 }
+pub struct ForeignKeyRef {
+    pub columns: Vec<&'static str>,
+    pub referenced_table: &'static str,
+    pub referenced_columns: Vec<&'static str>,
+}
 
 pub trait IntoColumnValue<T> {
     fn into_column_value(self) -> Value;

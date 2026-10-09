@@ -1,6 +1,6 @@
 use crate::{
     Connection, DatabaseConfig, DbError,
-    orm::{ColumnRef, Table},
+    orm::{ColumnRef, Table, column::ForeignKeyRef},
 };
 
 pub struct Schema {
@@ -20,6 +20,7 @@ impl Schema {
         self.tables.push(TableDefinition {
             name: T::table_name(),
             fields: T::fields(),
+            foreign_keys: T::foreign_keys(),
         });
 
         self
@@ -37,4 +38,5 @@ impl Schema {
 pub(crate) struct TableDefinition {
     pub name: &'static str,
     pub fields: Vec<ColumnRef>,
+    pub foreign_keys: Vec<ForeignKeyRef>,
 }

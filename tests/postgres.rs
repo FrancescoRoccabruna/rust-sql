@@ -1,6 +1,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-use rust_sql::{Connection, ConnectionPool, DatabaseConfig, DatabaseKind, Query, Value};
+use rust_sql::{
+    Connection, ConnectionPool, DatabaseConfig, DatabaseKind, Query, SessionMaker, Value,
+};
 
 use rust_sql::Table;
 use rust_sql::orm::{Schema, select};
@@ -1079,6 +1081,319 @@ fn postgres_orm_session_rejects_primary_key_change() {
         .exec(&Query::new(&format!(
             "DROP TABLE IF EXISTS {};",
             Test::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[derive(Table)]
+struct ForeignKeyUser {
+    #[primary_key]
+    id: i64,
+}
+
+#[derive(Table)]
+struct ForeignKeyPost {
+    #[primary_key]
+    id: i64,
+
+    #[foreign_key(
+        ForeignKeyUser::id,
+        relationship = user,
+        backref = posts
+    )]
+    user_id: i64,
+}
+
+#[test]
+fn postgres_orm_foreign_key_accepts_existing_reference() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = postgres_config();
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<ForeignKeyUser>()
+        .table::<ForeignKeyPost>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        connection
+            .exec(&Query::new(&format!(
+                "INSERT INTO {} (id) VALUES (1);",
+                ForeignKeyUser::TABLE_NAME
+            )))
+            .unwrap();
+
+        connection
+            .exec(&Query::new(&format!(
+                "INSERT INTO {} (id, user_id) VALUES (1, 1);",
+                ForeignKeyPost::TABLE_NAME
+            )))
+            .unwrap();
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[test]
+fn postgres_orm_foreign_key_rejects_missing_reference() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = postgres_config();
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<ForeignKeyUser>()
+        .table::<ForeignKeyPost>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let result = connection.exec(&Query::new(&format!(
+            "INSERT INTO {} (id, user_id) VALUES (1, 999);",
+            ForeignKeyPost::TABLE_NAME
+        )));
+
+        assert!(
+            result.is_err(),
+            "inserting a row with a missing foreign key should fail"
+        );
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[test]
+fn postgres_orm_relationship_and_backref() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = postgres_config();
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<ForeignKeyUser>()
+        .table::<ForeignKeyPost>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        connection
+            .exec(&Query::new(&format!(
+                "INSERT INTO {} (id) VALUES (1);",
+                ForeignKeyUser::TABLE_NAME
+            )))
+            .unwrap();
+
+        connection
+            .exec(&Query::new(&format!(
+                "INSERT INTO {} (id, user_id) VALUES (10, 1), (20, 1);",
+                ForeignKeyPost::TABLE_NAME
+            )))
+            .unwrap();
+
+        let maker = SessionMaker::new(config).unwrap();
+        let mut session = maker.session();
+
+        let post = session
+            .exec(&select::<ForeignKeyPost>().where_clause(ForeignKeyPost::id.eq(10)))
+            .unwrap()
+            .first()
+            .unwrap();
+
+        let user = post.user(&mut session).unwrap().unwrap();
+
+        assert_eq!(user.read().id, 1);
+
+        let posts = user.posts(&mut session).unwrap();
+
+        assert_eq!(posts.len(), 2);
+
+        assert!(posts.iter().any(|post| post.read().id == 10));
+        assert!(posts.iter().any(|post| post.read().id == 20));
+
+        let same_post = posts.iter().find(|entity| entity.read().id == 10).unwrap();
+
+        assert!(post.ptr_eq(same_post));
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    if let Err(payload) = result {
+        resume_unwind(payload);
+    }
+}
+
+#[derive(Table)]
+struct NullableForeignKeyPost {
+    #[primary_key]
+    id: i64,
+
+    #[foreign_key(
+        ForeignKeyUser::id,
+        relationship = user
+    )]
+    user_id: Option<i64>,
+}
+
+#[test]
+fn postgres_orm_nullable_relationship_returns_none() {
+    let _guard = ORM_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    let config = postgres_config();
+    let mut connection = config.connect().unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            NullableForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
+        )))
+        .unwrap();
+
+    Schema::new(&config)
+        .unwrap()
+        .table::<ForeignKeyUser>()
+        .table::<NullableForeignKeyPost>()
+        .create_all()
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let maker = SessionMaker::new(config).unwrap();
+        let mut session = maker.session();
+
+        let post = session
+            .add(NullableForeignKeyPost {
+                id: 1,
+                user_id: None,
+            })
+            .unwrap();
+
+        session.commit().unwrap();
+
+        let user = post.user(&mut session).unwrap();
+
+        assert!(user.is_none());
+    }));
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            NullableForeignKeyPost::TABLE_NAME
+        )))
+        .unwrap();
+
+    connection
+        .exec(&Query::new(&format!(
+            "DROP TABLE IF EXISTS {};",
+            ForeignKeyUser::TABLE_NAME
         )))
         .unwrap();
 

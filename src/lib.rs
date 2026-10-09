@@ -19,4 +19,6 @@ pub use query::{ExecutableQuery, Query, QueryResult};
 
 pub use table::{Dataframe, DfError, ResultColumn, ResultRow, Value, ValueType};
 
+pub use orm::Entity;
+
 pub use rust_sql_derive::Table;

@@ -100,7 +100,6 @@ pub struct SelectResult<T: Table> {
     result: Vec<T>,
 }
 
-
 /// Result of executing an ORM `SELECT` query through a [`Session`].
 ///
 /// Each returned [`Entity`] is tracked by the session identity map.
